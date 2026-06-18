@@ -1,0 +1,236 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "Pinned redumper upstream tag"
+        required: false
+        type: string
+      create_updater_artifacts:
+        description: "Create signed Tauri updater artifacts"
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.result }}
+      app_version: ${{ steps.version.outputs.app_version }}
+      upstream_tag: ${{ steps.version.outputs.upstream_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          app_version=$(jq -r .version package.json)
+          upstream_tag=$(jq -r .tag .redumper/upstream.json)
+          echo "app_version=$app_version" >> "$GITHUB_OUTPUT"
+          echo "upstream_tag=$upstream_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Create draft release
+        id: create
+        uses: actions/github-script@v7
+        with:
+          result-encoding: string
+          script: |
+            const appVersion = '${{ steps.version.outputs.app_version }}'
+            const upstreamTag = '${{ steps.version.outputs.upstream_tag }}'
+            const manifest = require('./.redumper/upstream.json')
+            const targetTags = Object.entries(manifest.assets || {})
+              .map(([target, asset]) => [target, asset.tag || manifest.tag])
+            const pinnedTargets = targetTags
+              .filter(([, tag]) => tag !== upstreamTag)
+              .map(([target, tag]) => `${target}: ${tag}`)
+            const bundledLine = pinnedTargets.length
+              ? `Bundled redumper: ${upstreamTag}; pinned targets: ${pinnedTargets.join(', ')}`
+              : `Bundled redumper: ${upstreamTag}`
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: `v${appVersion}`,
+              name: `Redumper UI v${appVersion}`,
+              body: `${bundledLine}\n\nThis release includes redumper GPL-3.0 notices. See NOTICE.md in the repository.`,
+              draft: true,
+              prerelease: false
+            })
+            return String(data.id)
+
+  build:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: windows-x64
+            platform: windows-latest
+            artifact_suffix: Windows_x64
+            redumper_target: windows-x64
+            tauri_args: --target x86_64-pc-windows-msvc --bundles nsis
+            rust_targets: x86_64-pc-windows-msvc
+          - label: windows-arm64
+            platform: windows-latest
+            artifact_suffix: Windows_ARM
+            redumper_target: windows-arm64
+            tauri_args: --target aarch64-pc-windows-msvc --bundles nsis
+            rust_targets: aarch64-pc-windows-msvc
+          - label: macos-arm64
+            platform: macos-latest
+            artifact_suffix: macOS_ARM
+            redumper_target: macos-arm64
+            tauri_args: --target aarch64-apple-darwin --bundles app,dmg
+            rust_targets: aarch64-apple-darwin
+          - label: macos-x64
+            platform: macos-15-intel
+            artifact_suffix: macOS_x64
+            redumper_target: macos-x64
+            tauri_args: --target x86_64-apple-darwin --bundles app,dmg
+            rust_targets: x86_64-apple-darwin
+          - label: linux-x64
+            platform: ubuntu-24.04
+            artifact_suffix: Linux_x64
+            redumper_target: linux-x64
+            tauri_args: --bundles appimage
+            rust_targets: ""
+          - label: linux-arm64
+            platform: ubuntu-24.04-arm
+            artifact_suffix: Linux_ARM
+            redumper_target: linux-arm64
+            tauri_args: --bundles appimage
+            rust_targets: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: startsWith(matrix.platform, 'ubuntu-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust
+        if: matrix.rust_targets == ''
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Rust target
+        if: matrix.rust_targets != ''
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Prepare redumper resource
+        env:
+          REDUMPER_TARGET: ${{ matrix.redumper_target }}
+        run: npm run prepare-redumper
+
+      - name: Smoke test bundled redumper
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            exe="src-tauri/resources/redumper/bin/redumper.exe"
+          else
+            exe="src-tauri/resources/redumper/bin/redumper"
+          fi
+          "$exe" --version
+          "$exe" --help
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          args: ${{ matrix.tauri_args }} ${{ ((github.event_name == 'workflow_dispatch' && inputs.create_updater_artifacts) || vars.CREATE_UPDATER_ARTIFACTS == 'true') && '--config src-tauri/tauri.updater.conf.json' || '' }}
+
+      - name: Upload macOS release artifact
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${{ needs.create-release.outputs.app_version }}"
+          asset="Redumper UI_${{ matrix.artifact_suffix }}_v${version}.zip"
+          app_dir=$(find "src-tauri/target/${{ matrix.rust_targets }}/release/bundle/macos" -maxdepth 1 -name "Redumper UI.app" -type d | head -n 1)
+          if [[ -z "$app_dir" ]]; then
+            echo "Could not find macOS app bundle" >&2
+            exit 1
+          fi
+          ditto -c -k --keepParent "$app_dir" "$asset"
+          gh release upload "v${version}" "$asset" --clobber
+
+      - name: Upload Windows release artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = "${{ needs.create-release.outputs.app_version }}"
+          $asset = "Redumper UI_${{ matrix.artifact_suffix }}_v$version.exe"
+          $nsisDir = "src-tauri/target/${{ matrix.rust_targets }}/release/bundle/nsis"
+          $installer = Get-ChildItem -Path $nsisDir -Filter "*.exe" -Recurse | Select-Object -First 1
+          if (-not $installer) {
+            Write-Error "Could not find Windows NSIS installer"
+            exit 1
+          }
+          Copy-Item $installer.FullName $asset
+          gh release upload "v$version" $asset --clobber
+
+      - name: Upload Linux release artifact
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${{ needs.create-release.outputs.app_version }}"
+          asset="Redumper UI_${{ matrix.artifact_suffix }}_v${version}.AppImage"
+          appimage=$(find src-tauri/target -path "*/bundle/appimage/*" -name "*.AppImage" -type f | head -n 1)
+          if [[ -z "$appimage" ]]; then
+            echo "Could not find Linux AppImage" >&2
+            exit 1
+          fi
+          cp "$appimage" "$asset"
+          gh release upload "v${version}" "$asset" --clobber
+
+  publish-release:
+    needs: [create-release, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: Number('${{ needs.create-release.outputs.release_id }}'),
+              draft: false,
+              prerelease: false
+            })

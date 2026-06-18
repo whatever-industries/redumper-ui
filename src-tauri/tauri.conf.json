@@ -1,0 +1,63 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Redumper UI",
+  "version": "0.1.0",
+  "identifier": "com.redumper.ui",
+  "build": {
+    "beforeDevCommand": "npm run dev:vite",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build:web",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Redumper UI",
+        "width": 700,
+        "height": 430,
+        "minWidth": 660,
+        "minHeight": 400,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: https://asset.localhost; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNEQTFFOUI2QUUzMjIzQTAKUldTZ0l6S3V0dW1oUFM2MXlFR1NDSWxoTFZ6RnhIS2RpdndZQjRDRnFYMW52QzdKS1dyOFhDN2gK",
+      "endpoints": [
+        "https://github.com/whatever-industries/redumper-ui/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png"
+    ],
+    "category": "Utility",
+    "copyright": "Copyright Redumper UI contributors",
+    "licenseFile": "../LICENSE",
+    "resources": {
+      "resources/redumper": "redumper",
+      "../NOTICE.md": "NOTICE.md",
+      "../.redumper/upstream.json": "redumper-upstream.json"
+    },
+    "shortDescription": "Desktop frontend for redumper",
+    "longDescription": "A cross-platform GPL-compatible desktop UI for the redumper CLI.",
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "installMode": "perMachine"
+      }
+    }
+  }
+}

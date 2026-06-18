@@ -1,0 +1,55 @@
+name: Check Upstream Release
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Get latest upstream release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          latest_tag=$(gh api repos/superg/redumper/releases/latest --jq .tag_name)
+          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Get bundled version
+        id: local
+        run: |
+          current_tag=$(jq -r .tag .redumper/upstream.json)
+          echo "current_tag=$current_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Update pinned upstream manifest
+        if: ${{ steps.upstream.outputs.latest_tag != steps.local.outputs.current_tag }}
+        run: npm run update-upstream
+
+      - name: Commit manifest update
+        if: ${{ steps.upstream.outputs.latest_tag != steps.local.outputs.current_tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .redumper/upstream.json package.json package-lock.json src-tauri/Cargo.toml src-tauri/tauri.conf.json
+          git commit -m "Update bundled redumper to ${{ steps.upstream.outputs.latest_tag }}"
+          git push
+
+      - name: Trigger release build
+        if: ${{ steps.upstream.outputs.latest_tag != steps.local.outputs.current_tag }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run release.yml -f upstream_tag="${{ steps.upstream.outputs.latest_tag }}"

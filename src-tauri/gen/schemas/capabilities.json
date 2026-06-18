@@ -1,0 +1,1 @@
+{"main":{"identifier":"main","description":"Main window capabilities","local":true,"windows":["main","settings"],"permissions":["core:default","core:window:allow-set-size","dialog:default","opener:default"]}}
