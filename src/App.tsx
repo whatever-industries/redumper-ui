@@ -1988,7 +1988,7 @@ function LbaValue({ progress }: { progress: RunEvent["progress"] | null }) {
 function SpeedometerMetric({ speed, stage, running, progressPercent }: { speed: string; stage: string; running: boolean; progressPercent: number }) {
   const activePercent = running ? 80 : Math.min(100, Math.max(0, progressPercent));
   const needleAngle = running ? -58 + activePercent * 1.16 : -58;
-  const speedLabel = speed ? `${speed}x` : "Default";
+  const speedLabel = speed ? `${speed}x` : "48x";
   const statusText = running ? "Dumping in Progress..." : stage;
 
   return (
