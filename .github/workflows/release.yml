@@ -7,6 +7,10 @@ on:
         description: "Pinned redumper upstream tag"
         required: false
         type: string
+      release_suffix:
+        description: "Optional suffix for rebuilding the same redumper version, such as b"
+        required: false
+        type: string
       create_updater_artifacts:
         description: "Create signed Tauri updater artifacts"
         required: false
@@ -25,6 +29,7 @@ jobs:
     outputs:
       release_id: ${{ steps.create.outputs.result }}
       app_version: ${{ steps.version.outputs.app_version }}
+      release_version: ${{ steps.version.outputs.release_version }}
       upstream_tag: ${{ steps.version.outputs.upstream_tag }}
     steps:
       - name: Checkout
@@ -35,7 +40,11 @@ jobs:
         run: |
           app_version=$(jq -r .version package.json)
           upstream_tag=$(jq -r .tag .redumper/upstream.json)
+          release_number="${upstream_tag#b}"
+          release_suffix="${{ inputs.release_suffix }}"
+          release_version="${release_number}${release_suffix}"
           echo "app_version=$app_version" >> "$GITHUB_OUTPUT"
+          echo "release_version=$release_version" >> "$GITHUB_OUTPUT"
           echo "upstream_tag=$upstream_tag" >> "$GITHUB_OUTPUT"
 
       - name: Create draft release
@@ -45,6 +54,7 @@ jobs:
           result-encoding: string
           script: |
             const appVersion = '${{ steps.version.outputs.app_version }}'
+            const releaseVersion = '${{ steps.version.outputs.release_version }}'
             const upstreamTag = '${{ steps.version.outputs.upstream_tag }}'
             const manifest = require('./.redumper/upstream.json')
             const targetTags = Object.entries(manifest.assets || {})
@@ -58,9 +68,9 @@ jobs:
             const { data } = await github.rest.repos.createRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              tag_name: `v${appVersion}`,
-              name: `Redumper UI v${appVersion}`,
-              body: `${bundledLine}\n\nThis release includes redumper GPL-3.0 notices. See NOTICE.md in the repository.`,
+              tag_name: `v${releaseVersion}`,
+              name: `Redumper UI ${releaseVersion}`,
+              body: `${bundledLine}\nInternal app version: ${appVersion}\n\nThis release includes redumper GPL-3.0 notices. See NOTICE.md in the repository.`,
               draft: true,
               prerelease: false
             })
@@ -175,7 +185,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          args: ${{ matrix.tauri_args }} ${{ ((github.event_name == 'workflow_dispatch' && inputs.create_updater_artifacts) || vars.CREATE_UPDATER_ARTIFACTS == 'true') && '--config src-tauri/tauri.updater.conf.json' || '' }}
+          args: ${{ matrix.tauri_args }} ${{ ((github.event_name == 'workflow_dispatch' && inputs.create_updater_artifacts == true) || vars.CREATE_UPDATER_ARTIFACTS == 'true') && '--config src-tauri/tauri.updater.conf.json' || '' }}
 
       - name: Upload macOS release artifact
         if: runner.os == 'macOS'
@@ -184,7 +194,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          version="${{ needs.create-release.outputs.app_version }}"
+          version="${{ needs.create-release.outputs.release_version }}"
           asset="Redumper UI_${{ matrix.artifact_suffix }}_v${version}.zip"
           app_dir=$(find "src-tauri/target/${{ matrix.rust_targets }}/release/bundle/macos" -maxdepth 1 -name "Redumper UI.app" -type d | head -n 1)
           if [[ -z "$app_dir" ]]; then
@@ -200,7 +210,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $version = "${{ needs.create-release.outputs.app_version }}"
+          $version = "${{ needs.create-release.outputs.release_version }}"
           $asset = "Redumper UI_${{ matrix.artifact_suffix }}_v$version.exe"
           $nsisDir = "src-tauri/target/${{ matrix.rust_targets }}/release/bundle/nsis"
           $installer = Get-ChildItem -Path $nsisDir -Filter "*.exe" -Recurse | Select-Object -First 1
@@ -218,7 +228,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          version="${{ needs.create-release.outputs.app_version }}"
+          version="${{ needs.create-release.outputs.release_version }}"
           asset="Redumper UI_${{ matrix.artifact_suffix }}_v${version}.AppImage"
           appimage=$(find src-tauri/target -path "*/bundle/appimage/*" -name "*.AppImage" -type f | head -n 1)
           if [[ -z "$appimage" ]]; then
