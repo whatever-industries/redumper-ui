@@ -1175,7 +1175,6 @@ export default function App() {
                 <div className="command-row-heading">
                   <div className="settings-label">Command:</div>
                   <label className="command-mode-toggle" title="Use generic drive mode flags">
-                    <span>Generic Mode</span>
                     <input
                       type="checkbox"
                       checked={commandMode === "generic"}
@@ -1187,9 +1186,9 @@ export default function App() {
                       aria-label="Use Generic Mode"
                       className="accent-checkbox command-checkbox shrink-0"
                     />
+                    <span>Generic Mode</span>
                   </label>
                   <label className="command-mode-toggle" title="Use redump.info-compatible command">
-                    <span>Redump Compatible</span>
                     <input
                       type="checkbox"
                       checked={commandMode === "redump"}
@@ -1201,6 +1200,7 @@ export default function App() {
                       aria-label="Use Redump Compatible mode"
                       className="accent-checkbox command-checkbox shrink-0"
                     />
+                    <span>Redump Compatible</span>
                   </label>
                 </div>
                 {commandMode === "redump" ? (

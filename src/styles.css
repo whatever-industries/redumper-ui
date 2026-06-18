@@ -178,7 +178,8 @@ textarea {
   display: inline-flex;
   min-height: var(--top-control-height);
   align-items: center;
-  gap: 14px;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .command-row-heading .settings-label {
@@ -203,9 +204,9 @@ textarea {
 
 .command-mode-toggle {
   display: inline-flex;
-  min-height: var(--top-control-height);
+  min-height: 24px;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   color: var(--app-text);
   font-size: 14px;
   font-weight: 700;
@@ -245,13 +246,13 @@ textarea {
 .command-checkbox {
   position: relative;
   display: grid;
-  height: var(--top-control-height);
-  width: var(--top-control-height);
+  height: 18px;
+  width: 18px;
   margin: 0;
   place-items: center;
   appearance: none;
   border: 1px solid var(--app-border-strong);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--app-panel-alt);
   color: #0066cc;
   cursor: pointer;
@@ -268,11 +269,11 @@ textarea {
 
 .command-checkbox:checked::after {
   content: "";
-  width: 9px;
-  height: 16px;
-  border-right: 2.5px solid currentColor;
-  border-bottom: 2.5px solid currentColor;
-  transform: translateY(-2px) rotate(45deg);
+  width: 5px;
+  height: 9px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-1px) rotate(45deg);
 }
 
 .command-checkbox:disabled {
@@ -677,9 +678,14 @@ select:focus-visible {
   align-items: center;
   gap: 6px;
   color: var(--app-text);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.create-subfolder-toggle input {
+  height: 18px;
+  width: 18px;
 }
 
 .path-button {
@@ -1210,7 +1216,11 @@ select:focus-visible {
 
   .output-row {
     width: 100%;
-    grid-template-columns: minmax(0, 1fr) var(--top-control-height);
+    grid-template-columns: minmax(0, 1fr) var(--top-control-height) max-content;
+  }
+
+  .command-row-heading {
+    gap: 10px;
   }
 
   .option-row,
