@@ -156,6 +156,15 @@ jobs:
           else
             exe="src-tauri/resources/redumper/bin/redumper"
           fi
+          if [[ ! -f "$exe" ]]; then
+            echo "Prepared redumper binary is missing: $exe" >&2
+            exit 1
+          fi
+          if [[ "${{ matrix.redumper_target }}" == "windows-arm64" ]]; then
+            echo "Prepared Windows ARM64 redumper binary at $exe"
+            echo "Skipping execution because GitHub's Windows runner is x64."
+            exit 0
+          fi
           "$exe" --version
           "$exe" --help
 
