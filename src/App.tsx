@@ -1203,20 +1203,22 @@ export default function App() {
                     />
                   </label>
                 </div>
-                <div className="command-row">
-                  <textarea
-                    ref={commandTextareaRef}
-                    value={commandText}
-                    onChange={(event) => {
-                      setManualCommand(event.target.value);
-                      setManualCommandDirty(true);
-                    }}
-                    className="control command-textarea"
-                    rows={3}
-                    spellCheck={false}
-                    aria-label="Redumper command"
-                  />
-                </div>
+                {commandMode === "redump" ? (
+                  <div className="command-row">
+                    <textarea
+                      ref={commandTextareaRef}
+                      value={commandText}
+                      onChange={(event) => {
+                        setManualCommand(event.target.value);
+                        setManualCommandDirty(true);
+                      }}
+                      className="control command-textarea"
+                      rows={3}
+                      spellCheck={false}
+                      aria-label="Redump compatible command"
+                    />
+                  </div>
+                ) : null}
               </div>
 
               {validationErrors.length ? (
