@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const execFileAsync = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const sourceFile = path.join(root, "assets", "icon.jpeg");
+const sourceFile = path.join(root, "assets", "source", "icon.png");
 const outDir = path.join(root, "src-tauri", "icons");
 const pngFile = path.join(outDir, "icon.png");
 const icoFile = path.join(outDir, "icon.ico");

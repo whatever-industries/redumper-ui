@@ -171,12 +171,15 @@ fn main() {
         .menu(|app| {
             let settings =
                 MenuItem::with_id(app, "settings", "Settings", true, Some("CmdOrCtrl+,"))?;
-            let file = Submenu::with_items(app, "File", true, &[&settings])?;
+            let close = MenuItem::with_id(app, "close", "Close", true, Some("CmdOrCtrl+W"))?;
+            let file = Submenu::with_items(app, "File", true, &[&settings, &close])?;
             Menu::with_items(app, &[&file])
         })
         .on_menu_event(|app, event| {
             if event.id() == "settings" {
                 let _ = open_settings_window(app);
+            } else if event.id() == "close" {
+                close_focused_window(app);
             }
         })
         .plugin(tauri_plugin_dialog::init())
@@ -221,6 +224,18 @@ fn open_settings_window(app: &AppHandle) -> Result<(), String> {
         .map_err(|e| format!("Unable to open Settings window: {e}"))?;
 
     Ok(())
+}
+
+fn close_focused_window(app: &AppHandle) {
+    if let Some(window) = app
+        .webview_windows()
+        .into_values()
+        .find(|window| window.is_focused().unwrap_or(false))
+    {
+        let _ = window.close();
+    } else if let Some(window) = app.get_webview_window("main") {
+        let _ = window.close();
+    }
 }
 
 #[tauri::command]

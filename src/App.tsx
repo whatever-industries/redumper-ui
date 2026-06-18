@@ -1215,7 +1215,11 @@ export default function App() {
                     disabled={!running && validationErrors.length > 0}
                     onClick={() => void (running ? cancel() : run())}
                   >
-                    {running ? <Square size={18} /> : <Play size={18} />}
+                    {running ? (
+                      <Square size={18} fill="currentColor" strokeWidth={0} />
+                    ) : (
+                      <Play size={18} fill="currentColor" strokeWidth={0} />
+                    )}
                     {running ? "Stop" : "Dump Disc"}
                   </button>
                   {refineRunRequest ? (

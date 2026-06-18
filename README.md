@@ -1,3 +1,5 @@
+[![Stand With Ukraine](assets/banners/stand-with-ukraine-redumper.svg)](https://stand-with-ukraine.pp.ua)
+
 # Redumper UI
 
 Cross-platform desktop frontend for [`superg/redumper`](https://github.com/superg/redumper).
@@ -5,6 +7,18 @@ Cross-platform desktop frontend for [`superg/redumper`](https://github.com/super
 The app is built with Tauri v2, Rust, React, TypeScript, and Tailwind CSS. It
 wraps the official redumper CLI with a typed command UI, streamed logs, and
 platform-aware packaging.
+
+## Support Ukraine
+
+Redumper UI includes the same Ukraine support banner used by
+[`superg/redumper`](https://github.com/superg/redumper), the upstream CLI app by
+superg. The banner links to donation and support resources for Ukraine.
+
+## Screenshots
+
+![Redumper UI main window](assets/screenshots/1.png)
+
+![Redumper UI settings window](assets/screenshots/2.png)
 
 ## Development
 
@@ -39,27 +53,6 @@ Release builds target Windows x64/ARM64, macOS x64/ARM64, and Linux x64/ARM64.
 The release workflow publishes draft releases in
 [`whatever-industries/redumper-ui`](https://github.com/whatever-industries/redumper-ui)
 and promotes the release after all matrix jobs finish.
-
-## App Updates
-
-The UI includes a `Check for Updates` control backed by Tauri's signed updater.
-It checks the latest GitHub release metadata at
-`https://github.com/whatever-industries/redumper-ui/releases/latest/download/latest.json`.
-
-Updater installs require signed updater artifacts. Generate the updater key with:
-
-```sh
-npm run tauri signer generate -- -w ~/.tauri/redumper-ui.key
-```
-
-Store the private key in the `TAURI_SIGNING_PRIVATE_KEY` GitHub secret and the
-optional password in `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The generated public
-key is committed in `src-tauri/tauri.conf.json`; if you regenerate the keypair,
-replace that `plugins.updater.pubkey` value with the new public key.
-
-To emit updater artifacts in CI, set the `CREATE_UPDATER_ARTIFACTS` repository
-variable to `true`, or enable `create_updater_artifacts` when manually running
-the release workflow.
 
 ## Licensing
 
