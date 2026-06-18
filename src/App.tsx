@@ -1173,7 +1173,7 @@ export default function App() {
 
               <div className="command-settings-row command-settings-row-open">
                 <div className="command-row-heading">
-                  <div className="settings-label">Command</div>
+                  <div className="settings-label">Command:</div>
                   <label className="command-mode-toggle" title="Use generic drive mode flags">
                     <span>Generic Mode</span>
                     <input
