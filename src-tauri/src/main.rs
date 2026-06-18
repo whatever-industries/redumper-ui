@@ -1,4 +1,5 @@
 #![cfg_attr(test, allow(dead_code))]
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
