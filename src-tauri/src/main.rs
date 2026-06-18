@@ -47,6 +47,8 @@ struct RunRequest {
     #[serde(default = "default_compress_log_files")]
     compress_log_files: bool,
     #[serde(default)]
+    archive_format: ArchiveFormat,
+    #[serde(default)]
     dump_twice_compare_hashes: bool,
     danger_confirmed: bool,
 }
@@ -64,6 +66,20 @@ struct ArchiveRequest {
     output_directory: PathBuf,
     image_name: Option<String>,
     archive_tool_path: Option<String>,
+    archive_format: ArchiveFormat,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum ArchiveFormat {
+    SevenZip,
+    Zip,
+}
+
+impl Default for ArchiveFormat {
+    fn default() -> Self {
+        Self::SevenZip
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -137,6 +153,14 @@ struct ExistingImageCandidate {
     supports_hash: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExistingOutputConflict {
+    exists: bool,
+    directory: String,
+    matches: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct RunEvent {
@@ -189,6 +213,7 @@ fn main() {
             get_app_info,
             list_drives,
             find_existing_image_candidate,
+            check_output_conflict,
             run_redumper,
             cancel_redumper,
             delete_duplicate_iso,
@@ -532,6 +557,7 @@ fn run_redumper(
             output_directory: image_path.clone(),
             image_name: request.image_name.clone(),
             archive_tool_path: request.archive_tool_path.clone(),
+            archive_format: request.archive_format,
         })
     } else {
         None
@@ -628,6 +654,38 @@ fn run_redumper(
     });
 
     Ok(run_id)
+}
+
+#[tauri::command]
+fn check_output_conflict(
+    app: AppHandle,
+    request: RunRequest,
+) -> Result<ExistingOutputConflict, String> {
+    validate_request(&request)?;
+
+    let effective_command = effective_request_command(&request)?;
+    let output_directory = resolve_output_directory(&app, &request, &effective_command);
+    if !command_writes_files(&effective_command) || !command_uses_image_path(&effective_command) {
+        return Ok(ExistingOutputConflict {
+            exists: false,
+            directory: output_directory.to_string_lossy().to_string(),
+            matches: Vec::new(),
+        });
+    }
+
+    let output_subfolder =
+        request.output_subfolder && command_uses_output_subfolder(&effective_command);
+    let matches = existing_output_matches(
+        &output_directory,
+        request.image_name.as_deref(),
+        output_subfolder,
+    )?;
+
+    Ok(ExistingOutputConflict {
+        exists: !matches.is_empty(),
+        directory: output_directory.to_string_lossy().to_string(),
+        matches,
+    })
 }
 
 fn run_dump_twice_compare_workflow(
@@ -767,6 +825,7 @@ fn run_dump_twice_compare_workflow(
                 output_directory: image_path.clone(),
                 image_name: Some(base_image_name.clone()),
                 archive_tool_path: first_request.archive_tool_path.clone(),
+                archive_format: first_request.archive_format,
             };
             match compress_log_files_into_archive(&archive_request) {
                 Ok(message) => emit_stage(&app_for_wait, &run_id_for_wait, "ARCHIVE", message),
@@ -1022,6 +1081,7 @@ fn redumper_executable_path(app: &AppHandle) -> Result<PathBuf, String> {
 fn default_output_root(app: &AppHandle) -> PathBuf {
     app.path()
         .download_dir()
+        .or_else(|_| app.path().home_dir().map(|home| home.join("Downloads")))
         .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
@@ -1069,6 +1129,57 @@ fn safe_output_folder_name(name: &str) -> String {
         .trim_matches('.')
         .trim()
         .to_string()
+}
+
+fn existing_output_matches(
+    output_directory: &Path,
+    image_name: Option<&str>,
+    output_subfolder: bool,
+) -> Result<Vec<String>, String> {
+    if !output_directory.exists() {
+        return Ok(Vec::new());
+    }
+
+    if !output_directory.is_dir() {
+        let name = output_directory
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| output_directory.to_string_lossy().to_string());
+        return Ok(vec![name]);
+    }
+
+    let image_name = image_name.map(str::trim).filter(|name| !name.is_empty());
+    let mut matches = Vec::new();
+
+    for entry in fs::read_dir(output_directory).map_err(|e| {
+        format!(
+            "Unable to inspect output directory {}: {e}",
+            output_directory.display()
+        )
+    })? {
+        let entry = entry.map_err(|e| format!("Unable to inspect output entry: {e}"))?;
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        let is_match = if output_subfolder {
+            true
+        } else if let Some(image_name) = image_name {
+            file_name == image_name
+                || file_name.starts_with(&format!("{image_name}."))
+                || file_name.starts_with(&format!("{image_name}_"))
+        } else {
+            false
+        };
+
+        if is_match {
+            matches.push(file_name);
+        }
+        if matches.len() >= 8 {
+            break;
+        }
+    }
+
+    matches.sort();
+    Ok(matches)
 }
 
 fn redumper_launch_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -1757,6 +1868,15 @@ fn compress_log_files_into_archive(request: &ArchiveRequest) -> Result<String, S
 
     if candidates.is_empty() {
         return Ok("No log files were available to compress.".to_string());
+    }
+
+    if request.archive_format == ArchiveFormat::Zip {
+        let (archive_name, deleted, kept_logs) =
+            compress_candidates_with_zip(request, &image_prefix, &candidates)?;
+        return Ok(format!(
+            "Created {archive_name}; archived {} file(s) as ZIP, deleted {deleted}, kept {kept_logs} .log file(s) outside the archive.",
+            candidates.len()
+        ));
     }
 
     if let Some(seven_zip) = find_7z_executable(request.archive_tool_path.as_deref()) {
@@ -3214,6 +3334,7 @@ mod tests {
             output_subfolder: true,
             archive_tool_path: None,
             compress_log_files: true,
+            archive_format: ArchiveFormat::SevenZip,
             dump_twice_compare_hashes: false,
             danger_confirmed: false,
         };
@@ -3237,6 +3358,7 @@ mod tests {
             output_subfolder: true,
             archive_tool_path: None,
             compress_log_files: true,
+            archive_format: ArchiveFormat::SevenZip,
             dump_twice_compare_hashes: false,
             danger_confirmed: false,
         };
@@ -3274,6 +3396,7 @@ mod tests {
             output_subfolder: true,
             archive_tool_path: None,
             compress_log_files: true,
+            archive_format: ArchiveFormat::SevenZip,
             dump_twice_compare_hashes: false,
             danger_confirmed: false,
         };
@@ -3290,6 +3413,39 @@ mod tests {
     }
 
     #[test]
+    fn detects_existing_output_in_subfolder_mode() {
+        let dir = test_temp_dir("output-conflict-subfolder");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("partial.iso"), b"partial dump").unwrap();
+
+        let matches = existing_output_matches(&dir, Some("movie"), true).unwrap();
+
+        assert_eq!(matches, vec!["partial.iso".to_string()]);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn detects_named_existing_output_without_subfolder_mode() {
+        let dir = test_temp_dir("output-conflict-root");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("movie.iso"), b"dump").unwrap();
+        fs::write(dir.join("movie.log"), b"log").unwrap();
+        fs::write(dir.join("other.iso"), b"other").unwrap();
+
+        let matches = existing_output_matches(&dir, Some("movie"), false).unwrap();
+
+        assert_eq!(
+            matches,
+            vec!["movie.iso".to_string(), "movie.log".to_string()]
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn rejects_manual_shell_tokens() {
         let req = RunRequest {
             command: "disc".to_string(),
@@ -3303,6 +3459,7 @@ mod tests {
             output_subfolder: true,
             archive_tool_path: None,
             compress_log_files: true,
+            archive_format: ArchiveFormat::SevenZip,
             dump_twice_compare_hashes: false,
             danger_confirmed: false,
         };
@@ -3375,6 +3532,7 @@ mod tests {
             output_directory: dir.clone(),
             image_name: Some("movie".to_string()),
             archive_tool_path: None,
+            archive_format: ArchiveFormat::Zip,
         };
 
         let (archive_name, deleted, kept_logs) = compress_candidates_with_zip(
@@ -3427,6 +3585,7 @@ mod tests {
             output_subfolder: true,
             archive_tool_path: None,
             compress_log_files: true,
+            archive_format: ArchiveFormat::SevenZip,
             dump_twice_compare_hashes: true,
             danger_confirmed: false,
         };

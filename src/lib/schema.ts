@@ -1,5 +1,6 @@
 export type DangerLevel = "normal" | "advanced" | "dangerous";
 export type OptionType = "boolean" | "string" | "number" | "enum" | "path";
+export type ArchiveFormat = "sevenZip" | "zip";
 
 export interface CommandSpec {
   id: string;
@@ -47,6 +48,7 @@ export interface RunRequest {
   outputSubfolder: boolean;
   archiveToolPath?: string;
   compressLogFiles: boolean;
+  archiveFormat: ArchiveFormat;
   dumpTwiceCompareHashes: boolean;
   dangerConfirmed: boolean;
 }
@@ -102,6 +104,12 @@ export interface ExistingImageCandidate {
   supportsRefine: boolean;
   supportsSplit: boolean;
   supportsHash: boolean;
+}
+
+export interface ExistingOutputConflict {
+  exists: boolean;
+  directory: string;
+  matches: string[];
 }
 
 export interface UpdateCheckResult {

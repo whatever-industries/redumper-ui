@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import clsx from "clsx";
 import {
@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { OPTIONS, getCommand } from "./lib/commands";
-import type { AppInfo, DriveCandidate, ExistingImageCandidate, OptionSpec, OptionState, RunEvent, RunRequest, UpdateCheckResult } from "./lib/schema";
+import type { AppInfo, ArchiveFormat, DriveCandidate, ExistingImageCandidate, ExistingOutputConflict, OptionSpec, OptionState, RunEvent, RunRequest, UpdateCheckResult } from "./lib/schema";
 import { buildRunRequest, commandPreview, validateRunRequest } from "./lib/validation";
 
 interface LogLine {
@@ -47,7 +47,7 @@ const SETTINGS_STORAGE_KEYS = {
   optionState: "redumper-ui-option-state",
   commandMode: "redumper-ui-command-mode",
   createOutputSubfolder: "redumper-ui-create-output-subfolder",
-  compressLogFiles: "redumper-ui-compress-log-files",
+  archiveFormat: "redumper-ui-archive-format",
   archiveToolPath: "redumper-ui-archive-tool-path",
   dumpTwiceCompareHashes: "redumper-ui-dump-twice-compare-hashes",
   firmwareCommandId: "redumper-ui-firmware-command-id",
@@ -149,7 +149,7 @@ export default function App() {
   const [manualCommand, setManualCommand] = useState("");
   const [manualCommandDirty, setManualCommandDirty] = useState(false);
   const [createOutputSubfolder, setCreateOutputSubfolder] = useSyncedState(SETTINGS_STORAGE_KEYS.createOutputSubfolder, true);
-  const [compressLogFiles, setCompressLogFiles] = useSyncedState(SETTINGS_STORAGE_KEYS.compressLogFiles, true);
+  const [archiveFormat, setArchiveFormat] = useSyncedState<ArchiveFormat>(SETTINGS_STORAGE_KEYS.archiveFormat, "sevenZip");
   const [archiveToolPath, setArchiveToolPath] = useSyncedState(SETTINGS_STORAGE_KEYS.archiveToolPath, "");
   const [dumpTwiceCompareHashes, setDumpTwiceCompareHashes] = useSyncedState(SETTINGS_STORAGE_KEYS.dumpTwiceCompareHashes, false);
   const [firmwareCommandId, setFirmwareCommandId] = useSyncedState<FirmwareCommandId>(SETTINGS_STORAGE_KEYS.firmwareCommandId, "flash::mt1339");
@@ -212,11 +212,12 @@ export default function App() {
         workingDirectory: "",
         outputSubfolder,
         archiveToolPath,
-        compressLogFiles,
+        archiveFormat,
+        compressLogFiles: command.writesFiles,
         dumpTwiceCompareHashes,
         dangerConfirmed: false
       }),
-    [archiveToolPath, commandId, compressLogFiles, drive, driveSpeed, dumpTwiceCompareHashes, effectiveImageName, imagePath, optionState, outputSubfolder]
+    [archiveFormat, archiveToolPath, command.writesFiles, commandId, drive, driveSpeed, dumpTwiceCompareHashes, effectiveImageName, imagePath, optionState, outputSubfolder]
   );
   const generatedPreview = useMemo(() => commandPreview(generatedRunRequest), [generatedRunRequest]);
   const commandText = manualCommandDirty ? manualCommand : generatedPreview;
@@ -524,7 +525,8 @@ export default function App() {
     isSettingsWindow,
     settingsTab,
     optionState,
-    compressLogFiles,
+    archiveFormat,
+    archiveToolPath,
     dumpTwiceCompareHashes,
     firmwareCommandId,
     firmwarePath,
@@ -752,22 +754,51 @@ export default function App() {
       return;
     }
 
+    const launchRequest = await requestOverwriteIfNeeded(request);
+    if (!launchRequest) {
+      return;
+    }
+
     setLogs([]);
     setProgress(null);
     setVisualProgressPercent(0);
     setRunFailed(false);
-    setActiveDriveLabel(selectedDrive?.label ?? request.drive ?? "Auto-selected drive");
+    setActiveDriveLabel(selectedDrive?.label ?? launchRequest.drive ?? "Auto-selected drive");
     setCancelRequested(false);
     cancelRequestedRef.current = false;
     setDuplicateIsoMatch(null);
     setStage("QUEUED");
     try {
-      await invoke<string>("run_redumper", { request });
+      await invoke<string>("run_redumper", { request: launchRequest });
     } catch (error) {
       setRunning(false);
       setActiveDriveLabel("");
       pushLog("error", String(error));
     }
+  }
+
+  async function requestOverwriteIfNeeded(request: RunRequest): Promise<RunRequest | null> {
+    if (hasEnabledOption(request, "--overwrite")) {
+      return request;
+    }
+
+    const conflict = await invoke<ExistingOutputConflict>("check_output_conflict", { request });
+    if (!conflict.exists) {
+      return request;
+    }
+
+    const matchList = conflict.matches.length ? `\n\nExisting files:\n${conflict.matches.join("\n")}` : "";
+    const overwrite = await ask(
+      `Output already exists in:\n${conflict.directory}${matchList}\n\nOverwrite and continue?`,
+      { title: "Overwrite existing dump?", kind: "warning" }
+    );
+
+    if (!overwrite) {
+      pushLog("info", "Dump cancelled before launch; existing output was left untouched.");
+      return null;
+    }
+
+    return withEnabledOverwrite(request);
   }
 
   async function run() {
@@ -784,6 +815,7 @@ export default function App() {
       imageName: undefined,
       workingDirectory: undefined,
       outputSubfolder: false,
+      archiveFormat,
       compressLogFiles: false,
       dumpTwiceCompareHashes: false,
       dangerConfirmed: false
@@ -963,8 +995,8 @@ export default function App() {
           {group === "General" ? (
             <>
               <ThemeOptionRow value={themeMode} onChange={updateThemeMode} />
-              <CompressLogOptionRow checked={compressLogFiles} disabled={!command.writesFiles} onChange={setCompressLogFiles} />
-              <ArchiveToolOptionRow value={archiveToolPath} disabled={!compressLogFiles} onChange={setArchiveToolPath} onChoose={() => void chooseFile(setArchiveToolPath)} />
+              <CompressLogOptionRow value={archiveFormat} disabled={!command.writesFiles} onChange={setArchiveFormat} />
+              <ArchiveToolOptionRow value={archiveToolPath} disabled={!command.writesFiles || archiveFormat === "zip"} onChange={setArchiveToolPath} onChoose={() => void chooseFile(setArchiveToolPath)} />
             </>
           ) : null}
           {group === "Drive Test" ? <DriveTestActionRow running={running} onRun={() => void runDriveTest()} /> : null}
@@ -1158,13 +1190,13 @@ export default function App() {
                   >
                     <FolderOpen size={18} />
                   </IconButton>
-                  <label className="create-subfolder-toggle" title="Create a folder named after Output inside the selected directory">
+                  <label className="command-mode-toggle create-subfolder-toggle" title="Create a folder named after Output inside the selected directory">
                     <input
                       type="checkbox"
                       checked={createOutputSubfolder}
                       disabled={outputFieldLoading}
                       onChange={(event) => setCreateOutputSubfolder(event.target.checked)}
-                      className="accent-checkbox h-3.5 w-3.5 shrink-0"
+                      className="accent-checkbox command-checkbox shrink-0"
                     />
                     <span>Create Subfolder</span>
                   </label>
@@ -1477,6 +1509,35 @@ function clearCompatibleAllDrivesPreset(state: OptionState): OptionState {
   };
 }
 
+function hasEnabledOption(request: RunRequest, flag: string) {
+  if (request.options.some((option) => option.enabled && option.flag === flag)) {
+    return true;
+  }
+  return request.manualCommand ? new RegExp(`(^|\\s)${escapeRegExp(flag)}(\\s|$)`).test(request.manualCommand) : false;
+}
+
+function withEnabledOverwrite(request: RunRequest): RunRequest {
+  const manualCommand = request.manualCommand?.trim();
+  if (manualCommand) {
+    return {
+      ...request,
+      manualCommand: hasEnabledOption(request, "--overwrite") ? manualCommand : `${manualCommand} --overwrite`
+    };
+  }
+
+  const hasOverwriteOption = request.options.some((option) => option.flag === "--overwrite");
+  return {
+    ...request,
+    options: hasOverwriteOption
+      ? request.options.map((option) => (option.flag === "--overwrite" ? { ...option, enabled: true } : option))
+      : [...request.options, { flag: "--overwrite", enabled: true }]
+  };
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function buildExistingImageRunRequest(
   command: ExistingImageActionCommand,
   candidate: ExistingImageCandidate | null,
@@ -1632,27 +1693,26 @@ function ThemeOptionRow({ value, onChange }: { value: ThemeMode; onChange: (valu
 }
 
 function CompressLogOptionRow({
-  checked,
+  value,
   disabled,
   onChange
 }: {
-  checked: boolean;
+  value: ArchiveFormat;
   disabled: boolean;
-  onChange: (checked: boolean) => void;
+  onChange: (value: ArchiveFormat) => void;
 }) {
   return (
-    <div className={clsx("option-row", checked && "enabled", disabled && "opacity-55")}>
-      <label className="option-toggle">
-        <input
-          type="checkbox"
-          checked={checked}
-          disabled={disabled}
-          onChange={(event) => onChange(event.target.checked)}
-          className="accent-checkbox h-3.5 w-3.5 shrink-0"
-        />
-        <span className="option-label">Archive auxiliary files</span>
-      </label>
-      <code className="option-flag">7z / zip fallback</code>
+    <div className={clsx("option-row enabled", disabled && "opacity-55")}>
+      <span className="option-label">Compress Log Files</span>
+      <select
+        className="control option-select"
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value as ArchiveFormat)}
+      >
+        <option value="sevenZip">7z (Zip fallback)</option>
+        <option value="zip">Zip</option>
+      </select>
     </div>
   );
 }
@@ -1672,7 +1732,6 @@ function ArchiveToolOptionRow({
     <div className={clsx("option-row archive-tool-row", value && "enabled", disabled && "opacity-55")}>
       <label className="option-label-group">
         <span className="option-label">7z Binary</span>
-        <span className="option-description">Optional. Auto-detects 7z/7zz/7za; falls back to .zip when unavailable.</span>
       </label>
       <div className="archive-tool-control">
         <input
@@ -2011,7 +2070,7 @@ function LbaValue({ progress }: { progress: RunEvent["progress"] | null }) {
 function SpeedometerMetric({ speed, stage, running, progressPercent }: { speed: string; stage: string; running: boolean; progressPercent: number }) {
   const activePercent = running ? 80 : Math.min(100, Math.max(0, progressPercent));
   const needleAngle = running ? -58 + activePercent * 1.16 : -58;
-  const speedLabel = speed ? `${speed}x` : "48x";
+  const speedLabel = speed ? `${speed}x` : running ? "Auto" : "--x";
   const statusText = running ? "Dumping in Progress..." : stage;
 
   return (
@@ -2028,7 +2087,7 @@ function SpeedometerMetric({ speed, stage, running, progressPercent }: { speed: 
           <span className="speedometer-hub" />
         </div>
         <div className="speedometer-readout">
-          <div className="metric-value truncate font-semibold">{speedLabel}</div>
+          <div className="metric-value truncate font-semibold">{running ? speedLabel : "--x"}</div>
         </div>
       </div>
       <div className="speedometer-status">{statusText}</div>

@@ -1,5 +1,5 @@
 import { getCommand, OPTIONS } from "./commands";
-import type { OptionState, RunRequest } from "./schema";
+import type { ArchiveFormat, OptionState, RunRequest } from "./schema";
 
 export function buildRunRequest(params: {
   command: string;
@@ -13,6 +13,7 @@ export function buildRunRequest(params: {
   manualCommand?: string;
   outputSubfolder?: boolean;
   archiveToolPath?: string;
+  archiveFormat?: ArchiveFormat;
   compressLogFiles: boolean;
   dumpTwiceCompareHashes: boolean;
   dangerConfirmed: boolean;
@@ -46,6 +47,7 @@ export function buildRunRequest(params: {
     outputSubfolder: params.outputSubfolder ?? true,
     archiveToolPath: params.archiveToolPath?.trim() || undefined,
     compressLogFiles: params.compressLogFiles,
+    archiveFormat: params.archiveFormat ?? "sevenZip",
     dumpTwiceCompareHashes: params.dumpTwiceCompareHashes,
     dangerConfirmed: params.dangerConfirmed
   };
