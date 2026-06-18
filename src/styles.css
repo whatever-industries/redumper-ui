@@ -380,7 +380,7 @@ textarea {
 .progress-finish {
   position: absolute;
   top: -24px;
-  right: -6px;
+  right: 0;
   z-index: 2;
   font-size: 22px;
   line-height: 1;

@@ -227,6 +227,7 @@ export default function App() {
   );
   const validationErrors = useMemo(() => validateRunRequest(runRequest), [runRequest]);
   const progressPercent = Math.min(Math.max(progress?.percentage ?? 0, 0), 100);
+  const raceComplete = !runFailed && !cancelRequested && visualProgressPercent >= 99.5;
   const isCdProgress = progress?.c2Errors != null || progress?.qErrors != null;
   const refineRunRequest = useMemo(
     () => buildExistingImageRunRequest("refine", existingImageCandidate, runRequest, drive),
@@ -1225,14 +1226,14 @@ export default function App() {
                   <div className="progress-track">
                     <div
                       className={clsx("progress-runner", running && "is-running", runFailed && "is-failed")}
-                      style={{ left: `clamp(16px, ${visualProgressPercent}%, 100%)` }}
+                      style={{ left: `clamp(16px, ${visualProgressPercent}%, calc(100% - 34px))` }}
                       aria-hidden="true"
                     >
                       {running && !runFailed && !cancelRequested ? <span className="progress-dust">💨</span> : null}
                       <span className="progress-car">🏎️</span>
                       {runFailed ? <span className="progress-fire">🔥</span> : null}
                     </div>
-                    <div className="progress-finish" aria-hidden="true">🏁</div>
+                    <div className="progress-finish" aria-hidden="true">{raceComplete ? "🏆" : "🏁"}</div>
                     <div className="progress-fill" style={{ width: `${visualProgressPercent}%` }} />
                   </div>
                   <div className="metric-grid mt-2 grid grid-cols-5 gap-2 text-xs">
