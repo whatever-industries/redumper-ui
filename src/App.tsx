@@ -471,7 +471,7 @@ export default function App() {
       if (cancelled) {
         return;
       }
-      await resizeMainWindowForLog();
+      await resizeMainWindowForLog(logExpanded);
     }
 
     return () => {
@@ -593,16 +593,16 @@ export default function App() {
           kind: "progress" as const,
           text
         };
-        const progressIndex = current.findIndex((line) => line.kind === "progress");
-        if (progressIndex >= 0) {
-          if (current[progressIndex].level === level && current[progressIndex].text === text) {
+        const last = current.at(-1);
+        if (last?.kind === "progress") {
+          if (last.level === level && last.text === text) {
             return current;
           }
 
           const next = [...current];
-          next[progressIndex] = {
+          next[next.length - 1] = {
             ...nextLine,
-            id: current[progressIndex].id
+            id: last.id
           };
           return next;
         }
@@ -923,15 +923,26 @@ export default function App() {
 
   async function toggleLogExpanded() {
     const nextExpanded = !logExpanded;
-    setLogExpanded(nextExpanded);
-    if (isTauri && !isSettingsWindow) {
-      window.requestAnimationFrame(() => {
-        if (nextExpanded) {
-          logEndRef.current?.scrollIntoView({ block: "end" });
-        }
-        void resizeMainWindowForLog().catch(() => undefined);
-      });
+
+    if (!isTauri || isSettingsWindow) {
+      setLogExpanded(nextExpanded);
+      return;
     }
+
+    if (nextExpanded) {
+      await resizeMainWindowForLog(true);
+      setLogExpanded(true);
+      window.requestAnimationFrame(() => {
+        logEndRef.current?.scrollIntoView({ block: "end" });
+        void resizeMainWindowForLog(true).catch(() => undefined);
+      });
+      return;
+    }
+
+    setLogExpanded(false);
+    window.requestAnimationFrame(() => {
+      void resizeMainWindowForLog(false).catch(() => undefined);
+    });
   }
 
   async function saveLog() {
@@ -962,13 +973,13 @@ export default function App() {
     }
   }
 
-  async function resizeMainWindowForLog() {
+  async function resizeMainWindowForLog(targetLogExpanded = logExpanded) {
     const windowRef = getCurrentWindow();
     const scaleFactor = await windowRef.scaleFactor();
     const innerSize = await windowRef.innerSize();
     const outerSize = await windowRef.outerSize();
     const chromeHeight = Math.max(0, (outerSize.height - innerSize.height) / scaleFactor);
-    const measuredHeight = measuredChildrenHeight(appMainRef.current) ?? document.documentElement.scrollHeight;
+    const measuredHeight = estimateMainContentHeight(appMainRef.current, logExpanded, targetLogExpanded) ?? document.documentElement.scrollHeight;
     const nextHeight = clampWindowHeight(measuredHeight + chromeHeight + MAIN_WINDOW_RESIZE_BUFFER);
     const nextWidth = COMPACT_WINDOW_WIDTH;
     await windowRef.setSize(new LogicalSize(nextWidth, nextHeight));
@@ -1435,6 +1446,16 @@ function measuredChildrenHeight(element: HTMLElement | null) {
   }
 
   return Array.from(element.children).reduce((height, child) => height + child.getBoundingClientRect().height, 0);
+}
+
+function estimateMainContentHeight(element: HTMLElement | null, currentLogExpanded: boolean, targetLogExpanded: boolean) {
+  const measuredHeight = measuredChildrenHeight(element);
+  if (measuredHeight === null || currentLogExpanded === targetLogExpanded) {
+    return measuredHeight;
+  }
+
+  const logBodyDelta = LOG_BODY_HEIGHT + 1;
+  return measuredHeight + (targetLogExpanded ? logBodyDelta : -logBodyDelta);
 }
 
 function clampWindowHeight(height: number) {

@@ -1973,6 +1973,7 @@ fn compress_candidates_with_7z(
         })?;
 
     if !output.status.success() {
+        let _ = fs::remove_file(request.output_directory.join(&archive_name));
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let detail = if stderr.is_empty() {
             format!("exit status {}", output.status)
@@ -2002,26 +2003,34 @@ fn compress_candidates_with_zip(
     let mut zip = zip::ZipWriter::new(archive_file);
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
+        .large_file(true)
         .unix_permissions(0o644);
 
-    for file_name in candidates {
-        let file_path = request.output_directory.join(file_name);
-        let mut input = fs::File::open(&file_path).map_err(|e| {
-            format!(
-                "Log compression failed: unable to read {} for ZIP archive: {e}",
-                file_path.display()
-            )
-        })?;
-        zip.start_file(file_name, options).map_err(|e| {
-            format!("Log compression failed: unable to add {file_name} to ZIP: {e}")
-        })?;
-        io::copy(&mut input, &mut zip).map_err(|e| {
-            format!("Log compression failed: unable to write {file_name} to ZIP: {e}")
-        })?;
-    }
+    let zip_result = (|| -> Result<(), String> {
+        for file_name in candidates {
+            let file_path = request.output_directory.join(file_name);
+            let mut input = fs::File::open(&file_path).map_err(|e| {
+                format!(
+                    "Log compression failed: unable to read {} for ZIP archive: {e}",
+                    file_path.display()
+                )
+            })?;
+            zip.start_file(file_name, options).map_err(|e| {
+                format!("Log compression failed: unable to add {file_name} to ZIP: {e}")
+            })?;
+            io::copy(&mut input, &mut zip).map_err(|e| {
+                format!("Log compression failed: unable to write {file_name} to ZIP: {e}")
+            })?;
+        }
 
-    zip.finish()
-        .map_err(|e| format!("Log compression failed: unable to finish ZIP archive: {e}"))?;
+        zip.finish()
+            .map_err(|e| format!("Log compression failed: unable to finish ZIP archive: {e}"))?;
+        Ok(())
+    })();
+    if let Err(error) = zip_result {
+        let _ = fs::remove_file(&archive_path);
+        return Err(error);
+    }
 
     let (deleted, kept_logs) = cleanup_archived_candidates(request, candidates, &archive_name)?;
     Ok((archive_name, deleted, kept_logs))
@@ -2079,7 +2088,19 @@ fn find_7z_executable(custom_path: Option<&str>) -> Option<PathBuf> {
         }
     }
 
-    for candidate in ["7z", "7zz", "7za"].map(PathBuf::from) {
+    for candidate in [
+        "7z",
+        "7zz",
+        "7za",
+        "/opt/homebrew/bin/7z",
+        "/opt/homebrew/bin/7zz",
+        "/opt/homebrew/bin/7za",
+        "/usr/local/bin/7z",
+        "/usr/local/bin/7zz",
+        "/usr/local/bin/7za",
+    ]
+    .map(PathBuf::from)
+    {
         if is_7z_executable(&candidate) {
             return Some(candidate);
         }
@@ -2194,6 +2215,7 @@ struct OutputThrottle {
     last_progress_event: Option<Instant>,
     last_progress_log: Option<Instant>,
     last_progress_percent: Option<u32>,
+    last_transient_log: Option<Instant>,
 }
 
 fn emit_output_line(
@@ -2222,7 +2244,8 @@ fn emit_output_line(
     }
     #[cfg(target_os = "macos")]
     let is_macos_unmount_error = line.contains("failed to unmount drive");
-    let progress_only = parsed.progress.is_some()
+    let replaceable_progress_log = parsed.progress.is_some() || parsed.transient_progress;
+    let progress_only = replaceable_progress_log
         && parsed.stage.is_none()
         && !parsed.warning
         && !parsed.error
@@ -2234,6 +2257,31 @@ fn emit_output_line(
             .progress
             .as_ref()
             .and_then(|progress| progress.percentage);
+        if parsed.transient_progress && parsed.progress.is_none() {
+            let transient_due = throttle
+                .last_transient_log
+                .is_none_or(|last| now.duration_since(last) >= Duration::from_millis(100));
+            if transient_due {
+                throttle.last_transient_log = Some(now);
+                emit_event(
+                    app,
+                    RunEvent {
+                        run_id: run_id.to_string(),
+                        kind: "progress".to_string(),
+                        stream: Some(stream.to_string()),
+                        line: Some(line),
+                        stage: None,
+                        progress: None,
+                        exit_code: None,
+                        message: None,
+                        duplicate_iso_path: None,
+                    },
+                );
+            }
+
+            return;
+        }
+
         let progress_due = throttle
             .last_progress_event
             .is_none_or(|last| now.duration_since(last) >= Duration::from_millis(250));
@@ -2310,6 +2358,7 @@ fn emit_output_line(
 struct ParsedLine {
     stage: Option<String>,
     progress: Option<ProgressEvent>,
+    transient_progress: bool,
     warning: bool,
     error: bool,
 }
@@ -2325,6 +2374,7 @@ fn parse_line(line: &str) -> ParsedLine {
     let lower = trimmed.to_ascii_lowercase();
     parsed.warning = lower.starts_with("warning:") || lower.contains(" warning:");
     parsed.error = lower.starts_with("error:");
+    parsed.transient_progress = is_replaceable_redumper_status(trimmed, &lower);
 
     if trimmed.contains("LBA:") && trimmed.contains('%') {
         parsed.progress = Some(ProgressEvent {
@@ -2340,6 +2390,36 @@ fn parse_line(line: &str) -> ParsedLine {
     }
 
     parsed
+}
+
+fn is_replaceable_redumper_status(trimmed: &str, lower: &str) -> bool {
+    if trimmed.starts_with('<')
+        || trimmed.starts_with("*** ")
+        || lower.starts_with("arguments:")
+        || lower.starts_with("warning:")
+        || lower.starts_with("error:")
+    {
+        return false;
+    }
+
+    let is_hash_status = lower.contains("hash")
+        || lower.contains("crc")
+        || lower.contains("md5")
+        || lower.contains("sha1")
+        || lower.contains("sha-1")
+        || lower.contains("sha256")
+        || lower.contains("sha-256");
+    let is_skeleton_status = lower.contains("skeleton");
+    let looks_incremental = trimmed.contains('%')
+        || trimmed.contains('\u{2588}')
+        || trimmed.contains("...")
+        || lower.contains("progress")
+        || lower.contains("calculat")
+        || lower.contains("creat")
+        || lower.contains("writ")
+        || lower.contains("read");
+
+    (is_hash_status || is_skeleton_status) && looks_incremental
 }
 
 fn parse_percentage(line: &str) -> Option<u32> {
@@ -3123,6 +3203,28 @@ mod tests {
     fn parses_stage_line() {
         let parsed = parse_line("*** SPLIT (time check: 1s)");
         assert_eq!(parsed.stage.as_deref(), Some("SPLIT"));
+    }
+
+    #[test]
+    fn marks_hash_status_as_replaceable_progress_log() {
+        let parsed = parse_line("hashing image... 42%");
+        assert!(parsed.transient_progress);
+        assert!(parsed.progress.is_none());
+    }
+
+    #[test]
+    fn marks_skeleton_status_as_replaceable_progress_log() {
+        let parsed = parse_line("creating skeleton... 9%");
+        assert!(parsed.transient_progress);
+        assert!(parsed.progress.is_none());
+    }
+
+    #[test]
+    fn keeps_final_rom_hash_line_as_regular_output() {
+        let parsed =
+            parse_line(r#"<rom name="dump.iso" size="1" crc="12345678" md5="abc" sha1="def" />"#);
+        assert!(!parsed.transient_progress);
+        assert!(parsed.progress.is_none());
     }
 
     #[test]
