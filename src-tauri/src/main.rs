@@ -1476,6 +1476,10 @@ fn image_candidate_for_directory(
         return Ok(None);
     }
 
+    if directory_contains_log_file(directory)? {
+        return Ok(None);
+    }
+
     let mut candidates = Vec::new();
     for entry in fs::read_dir(directory)
         .map_err(|e| {
@@ -1505,6 +1509,25 @@ fn image_candidate_for_directory(
 
     candidates.sort_by(|a, b| a.image_name.cmp(&b.image_name));
     Ok(candidates.into_iter().next())
+}
+
+fn directory_contains_log_file(directory: &Path) -> Result<bool, String> {
+    for entry in fs::read_dir(directory)
+        .map_err(|e| {
+            format!(
+                "Unable to read output directory {}: {e}",
+                directory.display()
+            )
+        })?
+        .flatten()
+    {
+        let path = entry.path();
+        if path.is_file() && matches!(file_extension(&path).as_deref(), Some("log")) {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 fn cue_image_candidate(
@@ -3145,7 +3168,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_complete_cue_set_with_matching_log() {
+    fn ignores_complete_cue_set_when_directory_has_log() {
         let dir = test_temp_dir("cue-with-log");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -3157,7 +3180,7 @@ mod tests {
         )
         .unwrap();
         fs::write(dir.join("sample.bin"), b"disc data").unwrap();
-        fs::write(dir.join("sample.log"), b"redumper log").unwrap();
+        fs::write(dir.join("dump.log"), b"redumper log").unwrap();
 
         let candidate = image_candidate_for_directory(&dir).unwrap();
 

@@ -659,7 +659,7 @@ select:focus-visible {
 
 .output-row {
   display: grid;
-  grid-template-columns: minmax(0, var(--output-name-width)) var(--top-control-height);
+  grid-template-columns: minmax(0, var(--output-name-width)) var(--top-control-height) max-content;
   align-items: center;
   gap: 8px;
   width: max-content;
@@ -669,6 +669,17 @@ select:focus-visible {
 .output-row .icon-button {
   height: var(--top-control-height);
   width: var(--top-control-height);
+}
+
+.create-subfolder-toggle {
+  display: inline-flex;
+  min-height: var(--top-control-height);
+  align-items: center;
+  gap: 6px;
+  color: var(--app-text);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .path-button {

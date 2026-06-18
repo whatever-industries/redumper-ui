@@ -46,6 +46,7 @@ const THEME_CHANGED_EVENT = "redumper-ui://theme-changed";
 const SETTINGS_STORAGE_KEYS = {
   optionState: "redumper-ui-option-state",
   commandMode: "redumper-ui-command-mode",
+  createOutputSubfolder: "redumper-ui-create-output-subfolder",
   compressLogFiles: "redumper-ui-compress-log-files",
   archiveToolPath: "redumper-ui-archive-tool-path",
   dumpTwiceCompareHashes: "redumper-ui-dump-twice-compare-hashes",
@@ -147,6 +148,7 @@ export default function App() {
   const [commandMode, setCommandMode] = useSyncedState<CommandMode>(SETTINGS_STORAGE_KEYS.commandMode, "redump");
   const [manualCommand, setManualCommand] = useState("");
   const [manualCommandDirty, setManualCommandDirty] = useState(false);
+  const [createOutputSubfolder, setCreateOutputSubfolder] = useSyncedState(SETTINGS_STORAGE_KEYS.createOutputSubfolder, true);
   const [compressLogFiles, setCompressLogFiles] = useSyncedState(SETTINGS_STORAGE_KEYS.compressLogFiles, true);
   const [archiveToolPath, setArchiveToolPath] = useSyncedState(SETTINGS_STORAGE_KEYS.archiveToolPath, "");
   const [dumpTwiceCompareHashes, setDumpTwiceCompareHashes] = useSyncedState(SETTINGS_STORAGE_KEYS.dumpTwiceCompareHashes, false);
@@ -192,7 +194,7 @@ export default function App() {
     [drive, imageNameSeed, selectedDrive?.label, selectedDrive?.volumeName]
   );
   const effectiveImageName = imageName.trim() || suggestedImageName;
-  const outputSubfolder = !existingImageCandidate;
+  const outputSubfolder = createOutputSubfolder;
   const visibleOptions = useMemo(
     () => OPTIONS.filter((option) => option.flag !== "--speed" && option.group !== "Firmware"),
     []
@@ -543,8 +545,9 @@ export default function App() {
     let cancelled = false;
 
     async function scanExistingImageCandidate() {
-      if (!isTauri || !imagePath.trim()) {
+      if (!isTauri || createOutputSubfolder || !imagePath.trim()) {
         setExistingImageCandidate(null);
+        setExistingImageChecking(false);
         return;
       }
 
@@ -570,7 +573,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [imagePath]);
+  }, [createOutputSubfolder, imagePath]);
 
   useEffect(() => {
     if (!isTauri) {
@@ -1155,6 +1158,16 @@ export default function App() {
                   >
                     <FolderOpen size={18} />
                   </IconButton>
+                  <label className="create-subfolder-toggle" title="Create a folder named after Output inside the selected directory">
+                    <input
+                      type="checkbox"
+                      checked={createOutputSubfolder}
+                      disabled={outputFieldLoading}
+                      onChange={(event) => setCreateOutputSubfolder(event.target.checked)}
+                      className="accent-checkbox h-3.5 w-3.5 shrink-0"
+                    />
+                    <span>Create Subfolder</span>
+                  </label>
                 </div>
               </SettingsRow>
 
