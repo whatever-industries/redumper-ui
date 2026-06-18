@@ -36,6 +36,7 @@ interface DuplicateIsoMatch {
 
 type ThemeMode = "system" | "light" | "dark";
 type SettingsTab = "general" | "cd" | "dvd" | "offset" | "drive" | "image" | "firmware";
+type CommandMode = "generic" | "redump";
 type ExistingImageActionCommand = "refine" | "split" | "hash" | "info" | "protection" | "dvdisokey";
 type FirmwareCommandId = "flash::mt1339" | "flash::mt1959" | "flash::sd616" | "flash::plextor";
 
@@ -44,7 +45,7 @@ const THEME_STORAGE_KEY = "redumper-ui-theme";
 const THEME_CHANGED_EVENT = "redumper-ui://theme-changed";
 const SETTINGS_STORAGE_KEYS = {
   optionState: "redumper-ui-option-state",
-  automaticGenericMode: "redumper-ui-automatic-generic-mode",
+  commandMode: "redumper-ui-command-mode",
   compressLogFiles: "redumper-ui-compress-log-files",
   archiveToolPath: "redumper-ui-archive-tool-path",
   dumpTwiceCompareHashes: "redumper-ui-dump-twice-compare-hashes",
@@ -143,9 +144,9 @@ export default function App() {
   const [imageNameSeed] = useState(() => formatDateStamp(new Date()));
   const [existingImageCandidate, setExistingImageCandidate] = useState<ExistingImageCandidate | null>(null);
   const [existingImageChecking, setExistingImageChecking] = useState(false);
-  const [automaticGenericMode, setAutomaticGenericMode] = useSyncedState(SETTINGS_STORAGE_KEYS.automaticGenericMode, true);
-  const [commandAuto, setCommandAuto] = useState(true);
+  const [commandMode, setCommandMode] = useSyncedState<CommandMode>(SETTINGS_STORAGE_KEYS.commandMode, "redump");
   const [manualCommand, setManualCommand] = useState("");
+  const [manualCommandDirty, setManualCommandDirty] = useState(false);
   const [compressLogFiles, setCompressLogFiles] = useSyncedState(SETTINGS_STORAGE_KEYS.compressLogFiles, true);
   const [archiveToolPath, setArchiveToolPath] = useSyncedState(SETTINGS_STORAGE_KEYS.archiveToolPath, "");
   const [dumpTwiceCompareHashes, setDumpTwiceCompareHashes] = useSyncedState(SETTINGS_STORAGE_KEYS.dumpTwiceCompareHashes, false);
@@ -157,6 +158,8 @@ export default function App() {
   const [running, setRunning] = useState(false);
   const [cancelRequested, setCancelRequested] = useState(false);
   const [drivesRefreshing, setDrivesRefreshing] = useState(false);
+  const [drivesReady, setDrivesReady] = useState(!isTauri);
+  const [appInfoLoading, setAppInfoLoading] = useState(isTauri);
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateInstalling, setUpdateInstalling] = useState(false);
   const [availableUpdate, setAvailableUpdate] = useState<UpdateCheckResult | null>(null);
@@ -178,8 +181,10 @@ export default function App() {
 
   const selectedDrive = useMemo(() => drives.find((candidate) => candidate.path === drive), [drive, drives]);
   const driveFallback = running ? activeDriveLabel || "Auto-selected drive" : driveFallbackLabel(appInfo.platform);
+  const driveFieldLoading = !running && !drivesReady;
+  const outputFieldLoading = !running && (appInfoLoading || !drivesReady);
   const missingSelectedDriveLabel = running && drive && !selectedDrive ? activeDriveLabel || drive : "";
-  const genericUserModeActive = automaticGenericMode && Boolean(selectedDrive?.genericModeRequired);
+  const genericUserModeActive = commandMode === "generic";
   const commandId = genericUserModeActive ? "dump" : "disc";
   const command = getCommand(commandId);
   const suggestedImageName = useMemo(
@@ -192,7 +197,7 @@ export default function App() {
     () => OPTIONS.filter((option) => option.flag !== "--speed" && option.group !== "Firmware"),
     []
   );
-  const runRequest = useMemo(
+  const generatedRunRequest = useMemo(
     () =>
       buildRunRequest({
         command: commandId,
@@ -203,17 +208,24 @@ export default function App() {
         imagePath,
         imageName: effectiveImageName,
         workingDirectory: "",
-        manualCommand: commandAuto ? undefined : manualCommand,
         outputSubfolder,
         archiveToolPath,
         compressLogFiles,
         dumpTwiceCompareHashes,
         dangerConfirmed: false
       }),
-    [archiveToolPath, commandAuto, commandId, compressLogFiles, drive, driveSpeed, dumpTwiceCompareHashes, effectiveImageName, imagePath, manualCommand, optionState, outputSubfolder]
+    [archiveToolPath, commandId, compressLogFiles, drive, driveSpeed, dumpTwiceCompareHashes, effectiveImageName, imagePath, optionState, outputSubfolder]
+  );
+  const generatedPreview = useMemo(() => commandPreview(generatedRunRequest), [generatedRunRequest]);
+  const commandText = manualCommandDirty ? manualCommand : generatedPreview;
+  const runRequest = useMemo(
+    () => ({
+      ...generatedRunRequest,
+      manualCommand: manualCommandDirty ? commandText.trim() || undefined : undefined
+    }),
+    [commandText, generatedRunRequest, manualCommandDirty]
   );
   const validationErrors = useMemo(() => validateRunRequest(runRequest), [runRequest]);
-  const preview = useMemo(() => commandPreview(runRequest), [runRequest]);
   const progressPercent = Math.min(Math.max(progress?.percentage ?? 0, 0), 100);
   const isCdProgress = progress?.c2Errors != null || progress?.qErrors != null;
   const refineRunRequest = useMemo(
@@ -278,6 +290,7 @@ export default function App() {
       if (!silent) {
         pushLog("warning", "Drive refresh is available inside the Tauri app.");
       }
+      setDrivesReady(true);
       return;
     }
 
@@ -292,6 +305,7 @@ export default function App() {
     } catch (error) {
       pushLog("warning", String(error));
     } finally {
+      setDrivesReady(true);
       setDrivesRefreshing(false);
     }
   }
@@ -352,8 +366,9 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
 
-    async function load() {
+    async function loadAppInfo() {
       if (!isTauri) {
+        setAppInfoLoading(false);
         return;
       }
       try {
@@ -364,14 +379,15 @@ export default function App() {
         }
       } catch (error) {
         pushLog("error", String(error));
-      }
-
-      if (!cancelled) {
-        await refreshDrives(true);
+      } finally {
+        if (!cancelled) {
+          setAppInfoLoading(false);
+        }
       }
     }
 
-    void load();
+    void loadAppInfo();
+    void refreshDrives(true);
     return () => {
       cancelled = true;
     };
@@ -458,15 +474,20 @@ export default function App() {
       cancelled = true;
       window.cancelAnimationFrame(frame);
     };
-  }, [commandAuto, isSettingsWindow, logExpanded, logs.length, manualCommand]);
+  }, [commandText, isSettingsWindow, logExpanded, logs.length]);
 
   useEffect(() => {
-    if (commandAuto || !commandTextareaRef.current) {
+    if (!commandTextareaRef.current) {
       return;
     }
     commandTextareaRef.current.style.height = "auto";
     commandTextareaRef.current.style.height = `${commandTextareaRef.current.scrollHeight}px`;
-  }, [commandAuto, manualCommand]);
+  }, [commandText]);
+
+  useEffect(() => {
+    setManualCommand("");
+    setManualCommandDirty(false);
+  }, [commandMode]);
 
   useEffect(() => {
     if (!isTauri || !isSettingsWindow) {
@@ -500,7 +521,6 @@ export default function App() {
     isSettingsWindow,
     settingsTab,
     optionState,
-    automaticGenericMode,
     compressLogFiles,
     dumpTwiceCompareHashes,
     firmwareCommandId,
@@ -938,7 +958,6 @@ export default function App() {
         <div className="option-section-grid">
           {group === "General" ? (
             <>
-              <GenericDriveModeOptionRow checked={automaticGenericMode} active={genericUserModeActive} onChange={setAutomaticGenericMode} />
               <ThemeOptionRow value={themeMode} onChange={updateThemeMode} />
               <CompressLogOptionRow checked={compressLogFiles} disabled={!command.writesFiles} onChange={setCompressLogFiles} />
               <ArchiveToolOptionRow value={archiveToolPath} disabled={!compressLogFiles} onChange={setArchiveToolPath} onChoose={() => void chooseFile(setArchiveToolPath)} />
@@ -1086,10 +1105,11 @@ export default function App() {
                   <select
                     value={drive}
                     onChange={(event) => setDrive(event.target.value)}
-                    className="control drive-control"
-                    title={selectedDrive?.label ?? driveFallback}
+                    className={clsx("control drive-control", driveFieldLoading && "control-loading")}
+                    title={driveFieldLoading ? "Checking drives" : selectedDrive?.label ?? driveFallback}
+                    disabled={driveFieldLoading}
                   >
-                    <option value="">{driveFallback}</option>
+                    <option value="">{driveFieldLoading ? "Checking drives..." : driveFallback}</option>
                     {missingSelectedDriveLabel ? <option value={drive}>{missingSelectedDriveLabel}</option> : null}
                     {drives.map((candidate) => (
                       <option key={candidate.path} value={candidate.path}>
@@ -1122,12 +1142,14 @@ export default function App() {
                   <input
                     value={imageName}
                     onChange={(event) => setImageName(event.target.value)}
-                    placeholder={suggestedImageName}
-                    className="control"
+                    placeholder={outputFieldLoading ? "Loading output..." : suggestedImageName}
+                    className={clsx("control", outputFieldLoading && "control-loading")}
+                    disabled={outputFieldLoading}
                   />
                   <IconButton
                     title={imagePath || "Select output folder"}
                     aria-label="Select output folder"
+                    disabled={outputFieldLoading}
                     onClick={() => void chooseDirectory(setImagePath)}
                   >
                     <FolderOpen size={18} />
@@ -1135,38 +1157,51 @@ export default function App() {
                 </div>
               </SettingsRow>
 
-              <div className={clsx("command-settings-row", !commandAuto && "command-settings-row-open")}>
+              <div className="command-settings-row command-settings-row-open">
                 <div className="command-row-heading">
                   <div className="settings-label">Command</div>
-                  <label className="command-auto-toggle" title="Use generated command">
-                    <span>Auto</span>
+                  <label className="command-mode-toggle" title="Use generic drive mode flags">
+                    <span>Generic Mode</span>
                     <input
                       type="checkbox"
-                      checked={commandAuto}
+                      checked={commandMode === "generic"}
                       onChange={(event) => {
-                        const nextAuto = event.target.checked;
-                        if (!nextAuto) {
-                          setManualCommand(preview);
+                        if (event.target.checked) {
+                          setCommandMode("generic");
                         }
-                        setCommandAuto(nextAuto);
                       }}
-                      aria-label="Use generated command"
+                      aria-label="Use Generic Mode"
+                      className="accent-checkbox command-checkbox shrink-0"
+                    />
+                  </label>
+                  <label className="command-mode-toggle" title="Use redump.info-compatible command">
+                    <span>Redump Compatible</span>
+                    <input
+                      type="checkbox"
+                      checked={commandMode === "redump"}
+                      onChange={(event) => {
+                        if (event.target.checked) {
+                          setCommandMode("redump");
+                        }
+                      }}
+                      aria-label="Use Redump Compatible mode"
                       className="accent-checkbox command-checkbox shrink-0"
                     />
                   </label>
                 </div>
                 <div className="command-row">
-                  {commandAuto ? null : (
-                    <textarea
-                      ref={commandTextareaRef}
-                      value={manualCommand}
-                      onChange={(event) => setManualCommand(event.target.value)}
-                      className="control command-textarea"
-                      rows={3}
-                      spellCheck={false}
-                      aria-label="Manual redumper command"
-                    />
-                  )}
+                  <textarea
+                    ref={commandTextareaRef}
+                    value={commandText}
+                    onChange={(event) => {
+                      setManualCommand(event.target.value);
+                      setManualCommandDirty(true);
+                    }}
+                    className="control command-textarea"
+                    rows={3}
+                    spellCheck={false}
+                    aria-label="Redumper command"
+                  />
                 </div>
               </div>
 
@@ -1529,34 +1564,6 @@ function buildFirmwareRunRequest(
     dumpTwiceCompareHashes: false,
     dangerConfirmed: confirmed
   };
-}
-
-function GenericDriveModeOptionRow({
-  checked,
-  active,
-  onChange
-}: {
-  checked: boolean;
-  active: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <div className={clsx("option-row generic-drive-row", active && "enabled")}>
-      <label className="option-toggle">
-        <input
-          type="checkbox"
-          checked={checked}
-          onChange={(event) => onChange(event.target.checked)}
-          className="accent-checkbox h-3.5 w-3.5 shrink-0"
-        />
-        <span className="option-label-group">
-          <span className="option-label">Automatic Generic User Mode</span>
-          <span className="option-description">Triggers usability for non-compliant drives upon detectection.</span>
-        </span>
-      </label>
-      <code className="option-flag settings-visible-flag">--drive-type=GENERIC --force-split --leave-unchanged</code>
-    </div>
-  );
 }
 
 function buildDriveTestRunRequest(baseRequest: RunRequest, drive: string): RunRequest {

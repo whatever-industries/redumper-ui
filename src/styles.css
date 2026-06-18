@@ -23,7 +23,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -49,6 +50,12 @@ select {
   background: var(--app-bg);
   color: var(--app-text);
   color-scheme: light;
+  user-select: none;
+}
+
+.app-shell input,
+.app-shell textarea {
+  user-select: text;
 }
 
 .app-main {
@@ -194,7 +201,7 @@ select {
   font-family: inherit;
 }
 
-.command-auto-toggle {
+.command-mode-toggle {
   display: inline-flex;
   min-height: var(--top-control-height);
   align-items: center;
@@ -608,6 +615,10 @@ select:focus-visible {
 
 .control:disabled {
   background: var(--app-panel);
+  color: var(--app-muted);
+}
+
+.control-loading {
   color: var(--app-muted);
 }
 
@@ -1078,16 +1089,6 @@ select:focus-visible {
 
 .settings-window-shell .option-row:has(> .option-flag) {
   grid-template-columns: minmax(0, 1fr) 0;
-}
-
-.settings-window-shell .generic-drive-row:has(> .option-flag) {
-  grid-template-columns: minmax(250px, 1fr) minmax(280px, 0.85fr);
-}
-
-.settings-window-shell .generic-drive-row > .settings-visible-flag {
-  justify-self: end;
-  max-width: 100%;
-  color: var(--app-muted);
 }
 
 .settings-window-shell .option-action-row {
