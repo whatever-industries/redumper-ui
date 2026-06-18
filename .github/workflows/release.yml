@@ -201,6 +201,8 @@ jobs:
             echo "Could not find macOS app bundle" >&2
             exit 1
           fi
+          codesign --force --deep --sign - "$app_dir"
+          codesign --verify --deep --strict --verbose=2 "$app_dir"
           ditto -c -k --keepParent "$app_dir" "$asset"
           gh release upload "v${version}" "$asset" --clobber
 
