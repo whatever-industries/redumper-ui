@@ -8,7 +8,8 @@ const execFileAsync = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sourceFile = path.join(root, "assets", "icon.jpeg");
 const outDir = path.join(root, "src-tauri", "icons");
-const outFile = path.join(outDir, "icon.png");
+const pngFile = path.join(outDir, "icon.png");
+const icoFile = path.join(outDir, "icon.ico");
 
 await fs.access(sourceFile);
 await fs.mkdir(outDir, { recursive: true });
@@ -19,13 +20,15 @@ await execFileAsync("python3", [
 from PIL import Image
 import sys
 
-source, output = sys.argv[1], sys.argv[2]
+source, png_output, ico_output = sys.argv[1], sys.argv[2], sys.argv[3]
 image = Image.open(source).convert("RGBA")
 image = image.resize((512, 512), Image.Resampling.LANCZOS)
-image.save(output, "PNG")
+image.save(png_output, "PNG")
+image.save(ico_output, "ICO", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
 `,
   sourceFile,
-  outFile
+  pngFile,
+  icoFile
 ]);
 
-console.log(`Generated ${outFile} from ${sourceFile}`);
+console.log(`Generated ${pngFile} and ${icoFile} from ${sourceFile}`);
