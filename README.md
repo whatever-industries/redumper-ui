@@ -8,12 +8,6 @@ The app is built with Tauri v2, Rust, React, TypeScript, and Tailwind CSS. It
 wraps the official redumper CLI with a typed command UI, streamed logs, and
 platform-aware packaging.
 
-## Support Ukraine
-
-Redumper UI includes the same Ukraine support banner used by
-[`superg/redumper`](https://github.com/superg/redumper), the upstream CLI app by
-superg. The banner links to donation and support resources for Ukraine.
-
 ## Screenshots
 
 ![Redumper UI main window](assets/screenshots/1.png)
