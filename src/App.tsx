@@ -1470,7 +1470,7 @@ export default function App() {
             {logExpanded ? (
               <div
                 ref={logBodyRef}
-                className="log-body overflow-auto border-t border-white/10 p-3 font-mono text-xs leading-5"
+                className="log-body overflow-auto border-t border-white/10 px-3 pb-8 pt-3 font-mono text-xs leading-5"
                 style={{ height: logBodyHeight }}
               >
                 {logs.length === 0 ? <div className="text-white/35">Waiting for output</div> : null}
