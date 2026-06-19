@@ -182,7 +182,7 @@ export default function App() {
   const [existingImageScanVersion, setExistingImageScanVersion] = useState(0);
   const appMainRef = useRef<HTMLElement | null>(null);
   const settingsWindowRef = useRef<HTMLElement | null>(null);
-  const logEndRef = useRef<HTMLDivElement | null>(null);
+  const logBodyRef = useRef<HTMLDivElement | null>(null);
   const commandTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const progressRef = useRef<RunEvent["progress"] | null>(null);
   const cancelRequestedRef = useRef(false);
@@ -239,6 +239,9 @@ export default function App() {
   const progressPercent = Math.min(Math.max(progress?.percentage ?? 0, 0), 100);
   const hasRemainingErrors = progressHasErrors(progress);
   const raceComplete = !runFailed && !hasRemainingErrors && !cancelRequested && visualProgressPercent >= 99.5;
+  const racePositionStyle = {
+    "--race-position": `clamp(16px, ${visualProgressPercent}%, calc(100% - 34px))`
+  } as CSSProperties;
   const isCdProgress = progress?.c2Errors != null || progress?.qErrors != null;
   const refineRunRequest = useMemo(
     () => buildExistingImageRunRequest("refine", existingImageCandidate, runRequest, drive),
@@ -294,6 +297,10 @@ export default function App() {
   }
 
   async function refreshDrives(silent = false) {
+    if (!silent) {
+      resetRunVisuals();
+    }
+
     if (!isTauri) {
       if (!silent) {
         pushLog("warning", "Drive refresh is available inside the Tauri app.");
@@ -316,6 +323,15 @@ export default function App() {
       setDrivesReady(true);
       setDrivesRefreshing(false);
     }
+  }
+
+  function resetRunVisuals() {
+    setProgress(null);
+    setVisualProgressPercent(0);
+    setRunFailed(false);
+    setCancelRequested(false);
+    cancelRequestedRef.current = false;
+    setStage("Idle");
   }
 
   useEffect(() => {
@@ -425,7 +441,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ block: "end" });
+    scrollLogToBottom();
   }, [logs]);
 
   useEffect(() => {
@@ -977,7 +993,8 @@ export default function App() {
       await resizeMainWindowForLog(true);
       setLogExpanded(true);
       window.requestAnimationFrame(() => {
-        logEndRef.current?.scrollIntoView({ block: "end" });
+        scrollLogToBottom();
+        window.scrollTo({ top: 0, left: 0 });
       });
       return;
     }
@@ -1024,10 +1041,21 @@ export default function App() {
     await windowRef.setSize(new LogicalSize(nextWidth, nextHeight));
 
     await new Promise((resolve) => window.requestAnimationFrame(resolve));
+    window.scrollTo({ top: 0, left: 0 });
     const overflow = document.documentElement.scrollHeight - window.innerHeight;
     if (overflow > 1) {
       await windowRef.setSize(new LogicalSize(nextWidth, clampWindowHeight(nextHeight + overflow + 2)));
+      await new Promise((resolve) => window.requestAnimationFrame(resolve));
+      window.scrollTo({ top: 0, left: 0 });
     }
+  }
+
+  function scrollLogToBottom() {
+    const logBody = logBodyRef.current;
+    if (!logBody) {
+      return;
+    }
+    logBody.scrollTop = logBody.scrollHeight;
   }
 
   function renderSettingsGroup(group: string) {
@@ -1313,10 +1341,9 @@ export default function App() {
             <div className="app-content grid gap-3">
               <div className="workflow-column">
                 <div className="progress-stack">
-                  <div className="progress-track">
+                  <div className="progress-track" style={racePositionStyle}>
                     <div
                       className={clsx("progress-runner", running && "is-running", runFailed && "is-failed")}
-                      style={{ left: `clamp(16px, ${visualProgressPercent}%, calc(100% - 34px))` }}
                       aria-hidden="true"
                     >
                       {running && !runFailed && !cancelRequested ? <img className="progress-dust" src={smokeIcon} alt="" /> : null}
@@ -1324,7 +1351,7 @@ export default function App() {
                       {runFailed ? <img className="progress-fire" src={fireIcon} alt="" /> : null}
                     </div>
                     <img className="progress-finish" src={raceComplete ? trophyIcon : flagIcon} alt="" aria-hidden="true" />
-                    <div className="progress-fill" style={{ width: `${visualProgressPercent}%` }} />
+                    <div className="progress-fill" />
                   </div>
                   <div className="metric-grid mt-1.5 grid grid-cols-6 gap-1 text-xs">
                     <SpeedometerMetric running={running} progressPercent={progressPercent} />
@@ -1421,14 +1448,13 @@ export default function App() {
             </div>
 
             {logExpanded ? (
-              <div className="log-body overflow-auto border-t border-white/10 p-3 font-mono text-xs leading-5">
+              <div ref={logBodyRef} className="log-body overflow-auto border-t border-white/10 p-3 font-mono text-xs leading-5">
                 {logs.length === 0 ? <div className="text-white/35">Waiting for output</div> : null}
                 {logs.map((line) => (
                   <div key={line.id} className={clsx("log-line", line.level, line.kind)}>
                     {line.text}
                   </div>
                 ))}
-                <div ref={logEndRef} />
               </div>
             ) : null}
           </section>
