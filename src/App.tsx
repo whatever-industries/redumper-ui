@@ -481,7 +481,7 @@ export default function App() {
       cancelled = true;
       window.cancelAnimationFrame(frame);
     };
-  }, [commandText, isSettingsWindow, logExpanded, logs.length]);
+  }, [appInfo.platform, commandText, isSettingsWindow, logExpanded, logs.length]);
 
   useEffect(() => {
     if (!commandTextareaRef.current) {
@@ -1003,10 +1003,7 @@ export default function App() {
 
   async function resizeMainWindowForLog(targetLogExpanded = logExpanded) {
     const windowRef = getCurrentWindow();
-    const scaleFactor = await windowRef.scaleFactor();
-    const innerSize = await windowRef.innerSize();
-    const outerSize = await windowRef.outerSize();
-    const chromeHeight = Math.max(0, (outerSize.height - innerSize.height) / scaleFactor);
+    const chromeHeight = await mainWindowChromeHeight(windowRef, appInfo.platform);
     const measuredHeight = estimateMainContentHeight(appMainRef.current, logExpanded, targetLogExpanded) ?? document.documentElement.scrollHeight;
     const nextHeight = clampWindowHeight(measuredHeight + chromeHeight + MAIN_WINDOW_RESIZE_BUFFER);
     const nextWidth = COMPACT_WINDOW_WIDTH;
@@ -1472,6 +1469,17 @@ function estimateMainContentHeight(element: HTMLElement | null, currentLogExpand
 
   const logBodyDelta = LOG_BODY_HEIGHT + 1;
   return measuredHeight + (targetLogExpanded ? logBodyDelta : -logBodyDelta);
+}
+
+async function mainWindowChromeHeight(windowRef: ReturnType<typeof getCurrentWindow>, platform: string) {
+  if (platform === "windows") {
+    return 0;
+  }
+
+  const scaleFactor = await windowRef.scaleFactor();
+  const innerSize = await windowRef.innerSize();
+  const outerSize = await windowRef.outerSize();
+  return Math.max(0, (outerSize.height - innerSize.height) / scaleFactor);
 }
 
 function clampWindowHeight(height: number) {
