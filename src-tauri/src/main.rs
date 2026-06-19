@@ -1611,11 +1611,9 @@ fn image_candidate_for_directory(
         return Ok(None);
     }
 
-    if directory_contains_log_file(directory)? {
-        return Ok(None);
-    }
-
-    let mut candidates = Vec::new();
+    let mut log_files = Vec::new();
+    let mut scram_files = Vec::new();
+    let mut has_bin = false;
     for entry in fs::read_dir(directory)
         .map_err(|e| {
             format!(
@@ -1630,128 +1628,93 @@ fn image_candidate_for_directory(
             continue;
         }
         match file_extension(&path).as_deref() {
-            Some("cue") => {
-                if let Some(candidate) = cue_image_candidate(directory, &path)? {
-                    candidates.push(candidate);
-                }
-            }
-            Some("iso") => candidates.push(single_file_image_candidate(
-                directory, &path, false, false, true,
-            )?),
+            Some("log") => log_files.push(path),
+            Some("scram") => scram_files.push(path),
+            Some("bin") => has_bin = true,
             _ => {}
         }
     }
 
-    candidates.sort_by(|a, b| a.image_name.cmp(&b.image_name));
-    Ok(candidates.into_iter().next())
-}
+    if has_bin || log_files.is_empty() || scram_files.is_empty() {
+        return Ok(None);
+    }
 
-fn directory_contains_log_file(directory: &Path) -> Result<bool, String> {
-    for entry in fs::read_dir(directory)
-        .map_err(|e| {
-            format!(
-                "Unable to read output directory {}: {e}",
-                directory.display()
-            )
-        })?
-        .flatten()
-    {
-        let path = entry.path();
-        if path.is_file() && matches!(file_extension(&path).as_deref(), Some("log")) {
+    let has_read_errors = log_files.iter().try_fold(false, |found, path| {
+        if found {
             return Ok(true);
         }
-    }
-
-    Ok(false)
-}
-
-fn cue_image_candidate(
-    directory: &Path,
-    cue_path: &Path,
-) -> Result<Option<ExistingImageCandidate>, String> {
-    if cue_path.with_extension("log").is_file() {
+        log_file_has_refinable_read_errors(path)
+    })?;
+    if !has_read_errors {
         return Ok(None);
     }
 
-    let text = fs::read_to_string(cue_path)
-        .map_err(|e| format!("Unable to read cue file {}: {e}", cue_path.display()))?;
-    let referenced_files = cue_referenced_files(&text);
-    if referenced_files.is_empty() {
-        return Ok(None);
+    let mut files = Vec::new();
+    for path in log_files.iter().chain(scram_files.iter()) {
+        files.push(file_name(path)?);
     }
-
-    let mut files = vec![file_name(cue_path)?];
-    for referenced in referenced_files {
-        let referenced_path = Path::new(&referenced);
-        if referenced_path.is_absolute() {
-            return Ok(None);
-        }
-        let candidate_path = directory.join(referenced_path);
-        if !candidate_path.is_file() {
-            return Ok(None);
-        }
-        files.push(referenced);
-    }
-
     files.sort();
     files.dedup();
 
+    let image_name = scram_files
+        .iter()
+        .filter_map(|path| path.file_stem().and_then(|value| value.to_str()))
+        .min()
+        .unwrap_or_default()
+        .to_string();
+
     Ok(Some(ExistingImageCandidate {
         directory: directory.to_string_lossy().to_string(),
-        image_name: cue_path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default()
-            .to_string(),
+        image_name,
         files,
         supports_refine: true,
-        supports_split: true,
-        supports_hash: true,
+        supports_split: false,
+        supports_hash: false,
     }))
 }
 
-fn single_file_image_candidate(
-    directory: &Path,
-    image_path: &Path,
-    supports_refine: bool,
-    supports_split: bool,
-    supports_hash: bool,
-) -> Result<ExistingImageCandidate, String> {
-    Ok(ExistingImageCandidate {
-        directory: directory.to_string_lossy().to_string(),
-        image_name: image_path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default()
-            .to_string(),
-        files: vec![file_name(image_path)?],
-        supports_refine,
-        supports_split,
-        supports_hash,
-    })
+fn log_file_has_refinable_read_errors(path: &Path) -> Result<bool, String> {
+    let text = fs::read_to_string(path)
+        .map_err(|e| format!("Unable to read log file {}: {e}", path.display()))?;
+    Ok(text.lines().any(line_has_refinable_read_errors))
 }
 
-fn cue_referenced_files(text: &str) -> Vec<String> {
-    text.lines()
-        .filter_map(|line| cue_file_reference(line.trim_start()))
-        .collect()
+fn line_has_refinable_read_errors(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    if lower.contains("c2 shift") {
+        return false;
+    }
+    if (lower.contains("c2 error") || lower.contains("scsi error"))
+        && line_has_positive_number(&lower)
+    {
+        return true;
+    }
+
+    line_has_positive_metric(&lower, "c2") || line_has_positive_metric(&lower, "scsi")
 }
 
-fn cue_file_reference(line: &str) -> Option<String> {
-    if line.len() < 5 || !line[..5].eq_ignore_ascii_case("FILE ") {
-        return None;
-    }
-    let rest = &line[5..];
-    let rest = rest.trim_start();
-    if let Some(rest) = rest.strip_prefix('"') {
-        let end = rest.find('"')?;
-        return Some(rest[..end].to_string()).filter(|value| !value.trim().is_empty());
+fn line_has_positive_metric(line: &str, metric: &str) -> bool {
+    let mut search_start = 0usize;
+    while let Some(relative_index) = line[search_start..].find(metric) {
+        let index = search_start + relative_index + metric.len();
+        let after = &line[index..];
+        let after = after.trim_start_matches(|ch: char| {
+            ch.is_whitespace() || matches!(ch, ':' | 's' | '=' | '/' | ',' | '{' | '[' | '(')
+        });
+        let digits: String = after.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+        if !digits.is_empty() && digits.parse::<u64>().unwrap_or(0) > 0 {
+            return true;
+        }
+        search_start = index;
     }
 
-    rest.split_whitespace()
-        .next()
-        .map(str::to_string)
-        .filter(|value| !value.trim().is_empty())
+    false
+}
+
+fn line_has_positive_number(line: &str) -> bool {
+    line.split(|ch: char| !ch.is_ascii_digit())
+        .filter(|value| !value.is_empty())
+        .any(|value| value.parse::<u64>().unwrap_or(0) > 0)
 }
 
 fn file_extension(path: &Path) -> Option<String> {
@@ -3415,57 +3378,113 @@ mod tests {
     }
 
     #[test]
-    fn finds_refine_candidate_for_complete_cue_set() {
-        let dir = test_temp_dir("complete-cue");
+    fn finds_refine_candidate_for_scram_log_with_c2_errors() {
+        let dir = test_temp_dir("scram-c2");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("sample.scram"), b"scrambled data").unwrap();
+        fs::write(dir.join("sample.state"), b"state").unwrap();
         fs::write(
-            dir.join("sample.cue"),
-            r#"FILE "sample.bin" BINARY
-  TRACK 01 MODE1/2352
+            dir.join("sample.log"),
+            r#"media errors:
+  SCSI: 0 samples
+  C2: 903 samples
+  Q: 1110
 "#,
         )
         .unwrap();
-        fs::write(dir.join("sample.bin"), b"disc data").unwrap();
 
         let candidate = image_candidate_for_directory(&dir).unwrap().unwrap();
 
         assert_eq!(candidate.image_name, "sample");
         assert_eq!(
             candidate.files,
-            vec!["sample.bin".to_string(), "sample.cue".to_string()]
+            vec!["sample.log".to_string(), "sample.scram".to_string()]
         );
         assert!(candidate.supports_refine);
-        assert!(candidate.supports_split);
-        assert!(candidate.supports_hash);
+        assert!(!candidate.supports_split);
+        assert!(!candidate.supports_hash);
 
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
-    fn finds_hash_only_candidate_for_iso() {
-        let dir = test_temp_dir("iso");
+    fn finds_refine_candidate_for_errors_detected_c2_line() {
+        let dir = test_temp_dir("scram-errors-detected");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("movie.iso"), b"iso data").unwrap();
+        fs::write(dir.join("sample.scram"), b"scrambled data").unwrap();
+        fs::write(
+            dir.join("sample.log"),
+            "errors detected, track: 1, sectors: {SKIP: 0, C2: 8}, samples: {SKIP: 0, C2: 472}",
+        )
+        .unwrap();
 
         let candidate = image_candidate_for_directory(&dir).unwrap().unwrap();
 
-        assert_eq!(candidate.image_name, "movie");
-        assert_eq!(candidate.files, vec!["movie.iso".to_string()]);
-        assert!(!candidate.supports_refine);
-        assert!(!candidate.supports_split);
-        assert!(candidate.supports_hash);
+        assert_eq!(candidate.image_name, "sample");
 
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
-    fn ignores_incomplete_cue_set_for_refine_candidate() {
-        let dir = test_temp_dir("incomplete-cue");
+    fn finds_refine_candidate_for_scram_log_with_scsi_errors() {
+        let dir = test_temp_dir("scram-scsi");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("sample.cue"), r#"FILE "missing.bin" BINARY"#).unwrap();
+        fs::write(dir.join("sample.scram"), b"scrambled data").unwrap();
+        fs::write(
+            dir.join("sample.log"),
+            r#"media errors:
+  SCSI: 4 samples
+  C2: 0 samples
+  Q: 0
+"#,
+        )
+        .unwrap();
+
+        let candidate = image_candidate_for_directory(&dir).unwrap().unwrap();
+
+        assert_eq!(candidate.image_name, "sample");
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn finds_refine_candidate_for_progress_style_scsi_errors() {
+        let dir = test_temp_dir("scram-scsis");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("sample.scram"), b"scrambled data").unwrap();
+        fs::write(
+            dir.join("sample.log"),
+            "x [ 42%] LBA:    123/456, errors: { SCSIs: 1, C2s: 0, Q: 0 }",
+        )
+        .unwrap();
+
+        let candidate = image_candidate_for_directory(&dir).unwrap().unwrap();
+
+        assert_eq!(candidate.image_name, "sample");
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn ignores_scram_log_without_read_errors() {
+        let dir = test_temp_dir("scram-no-read-errors");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("sample.scram"), b"scrambled data").unwrap();
+        fs::write(
+            dir.join("sample.log"),
+            r#"configuration: MTK8B (read offset: +6, C2 shift: 0)
+media errors:
+  SCSI: 0 samples
+  C2: 0 samples
+  Q: 0
+"#,
+        )
+        .unwrap();
 
         let candidate = image_candidate_for_directory(&dir).unwrap();
 
@@ -3475,19 +3494,13 @@ mod tests {
     }
 
     #[test]
-    fn ignores_complete_cue_set_when_directory_has_log() {
-        let dir = test_temp_dir("cue-with-log");
+    fn ignores_scram_log_when_bin_files_exist() {
+        let dir = test_temp_dir("scram-with-bin");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(
-            dir.join("sample.cue"),
-            r#"FILE "sample.bin" BINARY
-  TRACK 01 MODE1/2352
-"#,
-        )
-        .unwrap();
-        fs::write(dir.join("sample.bin"), b"disc data").unwrap();
-        fs::write(dir.join("dump.log"), b"redumper log").unwrap();
+        fs::write(dir.join("sample.scram"), b"scrambled data").unwrap();
+        fs::write(dir.join("sample.bin"), b"bin data").unwrap();
+        fs::write(dir.join("sample.log"), "C2: 903 samples").unwrap();
 
         let candidate = image_candidate_for_directory(&dir).unwrap();
 

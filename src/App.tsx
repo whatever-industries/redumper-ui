@@ -52,7 +52,6 @@ const THEME_CHANGED_EVENT = "redumper-ui://theme-changed";
 const SETTINGS_STORAGE_KEYS = {
   optionState: "redumper-ui-option-state",
   commandMode: "redumper-ui-command-mode",
-  createOutputSubfolder: "redumper-ui-create-output-subfolder",
   archiveFormat: "redumper-ui-archive-format",
   archiveToolPath: "redumper-ui-archive-tool-path",
   dumpTwiceCompareHashes: "redumper-ui-dump-twice-compare-hashes",
@@ -154,7 +153,6 @@ export default function App() {
   const [commandMode, setCommandMode] = useSyncedState<CommandMode>(SETTINGS_STORAGE_KEYS.commandMode, "redump");
   const [manualCommand, setManualCommand] = useState("");
   const [manualCommandDirty, setManualCommandDirty] = useState(false);
-  const [createOutputSubfolder, setCreateOutputSubfolder] = useSyncedState(SETTINGS_STORAGE_KEYS.createOutputSubfolder, true);
   const [archiveFormat, setArchiveFormat] = useSyncedState<ArchiveFormat>(SETTINGS_STORAGE_KEYS.archiveFormat, "sevenZip");
   const [archiveToolPath, setArchiveToolPath] = useSyncedState(SETTINGS_STORAGE_KEYS.archiveToolPath, "");
   const [dumpTwiceCompareHashes, setDumpTwiceCompareHashes] = useSyncedState(SETTINGS_STORAGE_KEYS.dumpTwiceCompareHashes, false);
@@ -180,6 +178,7 @@ export default function App() {
   const [deletingDuplicateIso, setDeletingDuplicateIso] = useState(false);
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [logExpanded, setLogExpanded] = useState(false);
+  const [existingImageScanVersion, setExistingImageScanVersion] = useState(0);
   const appMainRef = useRef<HTMLElement | null>(null);
   const settingsWindowRef = useRef<HTMLElement | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
@@ -200,7 +199,7 @@ export default function App() {
     [drive, imageNameSeed, selectedDrive?.label, selectedDrive?.volumeName]
   );
   const effectiveImageName = imageName.trim() || suggestedImageName;
-  const outputSubfolder = createOutputSubfolder;
+  const outputSubfolder = true;
   const visibleOptions = useMemo(
     () => OPTIONS.filter((option) => option.flag !== "--speed" && option.group !== "Firmware"),
     []
@@ -223,7 +222,7 @@ export default function App() {
         dumpTwiceCompareHashes,
         dangerConfirmed: false
       }),
-    [archiveFormat, archiveToolPath, command.writesFiles, commandId, drive, driveSpeed, dumpTwiceCompareHashes, effectiveImageName, imagePath, optionState, outputSubfolder]
+    [archiveFormat, archiveToolPath, command.writesFiles, commandId, drive, driveSpeed, dumpTwiceCompareHashes, effectiveImageName, imagePath, optionState]
   );
   const generatedPreview = useMemo(() => commandPreview(generatedRunRequest), [generatedRunRequest]);
   const commandText = manualCommandDirty ? manualCommand : generatedPreview;
@@ -244,10 +243,6 @@ export default function App() {
   );
   const splitRunRequest = useMemo(
     () => buildExistingImageRunRequest("split", existingImageCandidate, runRequest, drive),
-    [drive, existingImageCandidate, runRequest]
-  );
-  const hashRunRequest = useMemo(
-    () => buildExistingImageRunRequest("hash", existingImageCandidate, runRequest, drive),
     [drive, existingImageCandidate, runRequest]
   );
   const infoRunRequest = useMemo(
@@ -553,7 +548,7 @@ export default function App() {
     let cancelled = false;
 
     async function scanExistingImageCandidate() {
-      if (!isTauri || createOutputSubfolder || !imagePath.trim()) {
+      if (!isTauri || !imagePath.trim()) {
         setExistingImageCandidate(null);
         setExistingImageChecking(false);
         return;
@@ -561,7 +556,11 @@ export default function App() {
 
       setExistingImageChecking(true);
       try {
-        const candidate = await invoke<ExistingImageCandidate | null>("find_existing_image_candidate", { directory: imagePath });
+        const candidate =
+          (await invoke<ExistingImageCandidate | null>("find_existing_image_candidate", { directory: imagePath })) ??
+          (await invoke<ExistingImageCandidate | null>("find_existing_image_candidate", {
+            directory: joinPath(imagePath, effectiveImageName)
+          }));
         if (!cancelled) {
           setExistingImageCandidate(candidate);
         }
@@ -581,7 +580,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [createOutputSubfolder, imagePath]);
+  }, [effectiveImageName, existingImageScanVersion, imagePath]);
 
   useEffect(() => {
     if (!isTauri) {
@@ -674,6 +673,7 @@ export default function App() {
         setVisualProgressPercent(0);
       } else {
         setVisualProgressPercent((current) => (event.exitCode === 0 ? 100 : current));
+        setExistingImageScanVersion((version) => version + 1);
       }
       pushLog("exit", `redumper exited${typeof event.exitCode === "number" ? ` with code ${event.exitCode}` : ""}`);
     }
@@ -781,6 +781,7 @@ export default function App() {
     setProgress(null);
     setVisualProgressPercent(0);
     setRunFailed(false);
+    setExistingImageCandidate(null);
     setActiveDriveLabel(selectedDrive?.label ?? launchRequest.drive ?? "Auto-selected drive");
     setCancelRequested(false);
     cancelRequestedRef.current = false;
@@ -852,13 +853,6 @@ export default function App() {
       return;
     }
     await startRedumperRequest(splitRunRequest);
-  }
-
-  async function hashExistingImage() {
-    if (!hashRunRequest) {
-      return;
-    }
-    await startRedumperRequest(hashRunRequest);
   }
 
   async function runImageInfo() {
@@ -1222,16 +1216,6 @@ export default function App() {
                   >
                     <FolderOpen size={18} />
                   </IconButton>
-                  <label className="command-mode-toggle create-subfolder-toggle" title="Create a folder named after Output inside the selected directory">
-                    <input
-                      type="checkbox"
-                      checked={createOutputSubfolder}
-                      disabled={outputFieldLoading}
-                      onChange={(event) => setCreateOutputSubfolder(event.target.checked)}
-                      className="accent-checkbox command-checkbox shrink-0"
-                    />
-                    <span>Create Subfolder</span>
-                  </label>
                 </div>
               </SettingsRow>
 
@@ -1358,16 +1342,6 @@ export default function App() {
                       Split
                     </button>
                   ) : null}
-                  {hashRunRequest ? (
-                    <button
-                      className="secondary-button workflow-action-button"
-                      disabled={running}
-                      title={`Hash ${hashRunRequest.imageName}`}
-                      onClick={() => void hashExistingImage()}
-                    >
-                      Hash
-                    </button>
-                  ) : null}
                   <IconButton title="Eject" className="eject-button" disabled={running} onClick={() => void ejectDrive()}>
                     <EjectIcon />
                   </IconButton>
@@ -1481,6 +1455,18 @@ function estimateMainContentHeight(element: HTMLElement | null, currentLogExpand
 
 function clampWindowHeight(height: number) {
   return Math.min(Math.max(height, MAIN_MIN_WINDOW_HEIGHT), MAIN_MAX_WINDOW_HEIGHT);
+}
+
+function joinPath(parent: string, child: string) {
+  const trimmedParent = parent.trim().replace(/[\\/]+$/, "");
+  const trimmedChild = child.trim().replace(/^[\\/]+/, "");
+  if (!trimmedParent) {
+    return trimmedChild;
+  }
+  if (!trimmedChild) {
+    return trimmedParent;
+  }
+  return `${trimmedParent}/${trimmedChild}`;
 }
 
 function useSyncedState<T>(key: string, fallback: T | (() => T)) {
