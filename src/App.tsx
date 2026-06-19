@@ -10,6 +10,7 @@ import {
   ChevronUp,
   FileSearch,
   FolderOpen,
+  Settings,
   Play,
   RefreshCw,
   Save,
@@ -18,6 +19,11 @@ import {
   Zap
 } from "lucide-react";
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import carIcon from "./assets/progress/car.svg";
+import fireIcon from "./assets/progress/fire.svg";
+import flagIcon from "./assets/progress/flag.svg";
+import smokeIcon from "./assets/progress/smoke.svg";
+import trophyIcon from "./assets/progress/trophy.svg";
 import { OPTIONS, getCommand } from "./lib/commands";
 import type { AppInfo, ArchiveFormat, DriveCandidate, ExistingImageCandidate, ExistingOutputConflict, OptionSpec, OptionState, RunEvent, RunRequest, UpdateCheckResult } from "./lib/schema";
 import { buildRunRequest, commandPreview, validateRunRequest } from "./lib/validation";
@@ -696,6 +702,18 @@ export default function App() {
     }
   }
 
+  async function openSettingsWindow() {
+    if (!isTauri) {
+      return;
+    }
+
+    try {
+      await invoke("show_settings_window");
+    } catch (error) {
+      pushLog("error", String(error));
+    }
+  }
+
   async function checkForUpdates(silent = false) {
     if (!isTauri) {
       if (!silent) {
@@ -1181,6 +1199,9 @@ export default function App() {
                   <IconButton title="Refresh drives" disabled={running || drivesRefreshing} onClick={() => void refreshDrives()}>
                     <RefreshCw size={18} className={clsx(drivesRefreshing && "animate-spin")} />
                   </IconButton>
+                  <IconButton title="Settings" className="settings-gear-button" onClick={() => void openSettingsWindow()}>
+                    <Settings size={19} />
+                  </IconButton>
                 </div>
               </SettingsRow>
 
@@ -1287,11 +1308,11 @@ export default function App() {
                       style={{ left: `clamp(16px, ${visualProgressPercent}%, calc(100% - 34px))` }}
                       aria-hidden="true"
                     >
-                      {running && !runFailed && !cancelRequested ? <span className="progress-dust">💨</span> : null}
-                      <span className="progress-car">🏎️</span>
-                      {runFailed ? <span className="progress-fire">🔥</span> : null}
+                      {running && !runFailed && !cancelRequested ? <img className="progress-dust" src={smokeIcon} alt="" /> : null}
+                      <img className="progress-car" src={carIcon} alt="" />
+                      {runFailed ? <img className="progress-fire" src={fireIcon} alt="" /> : null}
                     </div>
-                    <div className="progress-finish" aria-hidden="true">{raceComplete ? "🏆" : "🏁"}</div>
+                    <img className="progress-finish" src={raceComplete ? trophyIcon : flagIcon} alt="" aria-hidden="true" />
                     <div className="progress-fill" style={{ width: `${visualProgressPercent}%` }} />
                   </div>
                   <div className="metric-grid mt-2 grid grid-cols-5 gap-2 text-xs">

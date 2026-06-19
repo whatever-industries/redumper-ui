@@ -15,7 +15,7 @@ use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_updater::UpdaterExt;
 
-#[cfg(not(test))]
+#[cfg(all(not(test), target_os = "macos"))]
 use tauri::menu::{Menu, MenuItem, Submenu};
 
 const RUN_EVENT: &str = "redumper://event";
@@ -191,8 +191,10 @@ struct ProgressEvent {
 
 #[cfg(not(test))]
 fn main() {
-    tauri::Builder::default()
-        .manage(AppState::default())
+    let builder = tauri::Builder::default().manage(AppState::default());
+
+    #[cfg(target_os = "macos")]
+    let builder = builder
         .menu(|app| {
             let settings =
                 MenuItem::with_id(app, "settings", "Settings", true, Some("CmdOrCtrl+,"))?;
@@ -206,7 +208,9 @@ fn main() {
             } else if event.id() == "close" {
                 close_focused_window(app);
             }
-        })
+        });
+
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -219,6 +223,7 @@ fn main() {
             cancel_redumper,
             delete_duplicate_iso,
             save_log_file,
+            show_settings_window,
             check_for_updates,
             install_update
         ])
@@ -252,6 +257,12 @@ fn open_settings_window(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn show_settings_window(app: AppHandle) -> Result<(), String> {
+    open_settings_window(&app)
+}
+
+#[cfg(all(not(test), target_os = "macos"))]
 fn close_focused_window(app: &AppHandle) {
     if let Some(window) = app
         .webview_windows()
@@ -2082,31 +2093,72 @@ fn archive_prefix(image_name: &str) -> Option<String> {
 }
 
 fn find_7z_executable(custom_path: Option<&str>) -> Option<PathBuf> {
-    if let Some(path) = custom_path.map(str::trim).filter(|path| !path.is_empty()) {
-        let candidate = PathBuf::from(path);
-        if is_7z_executable(&candidate) {
-            return Some(candidate);
-        }
-    }
-
-    for candidate in [
-        "7z",
-        "7zz",
-        "7za",
-        "/opt/homebrew/bin/7z",
-        "/opt/homebrew/bin/7zz",
-        "/opt/homebrew/bin/7za",
-        "/usr/local/bin/7z",
-        "/usr/local/bin/7zz",
-        "/usr/local/bin/7za",
-    ]
-    .map(PathBuf::from)
-    {
+    for candidate in seven_zip_candidates(custom_path) {
         if is_7z_executable(&candidate) {
             return Some(candidate);
         }
     }
     None
+}
+
+fn seven_zip_candidates(custom_path: Option<&str>) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(path) = custom_path.map(str::trim).filter(|path| !path.is_empty()) {
+        let candidate = PathBuf::from(path);
+        candidates.push(candidate.clone());
+        candidates.push(candidate.join("7z.exe"));
+        candidates.push(candidate.join("7z"));
+        candidates.push(candidate.join("7zz"));
+        candidates.push(candidate.join("7za"));
+    }
+
+    candidates.extend(
+        [
+            "7z",
+            "7z.exe",
+            "7zz",
+            "7zz.exe",
+            "7za",
+            "7za.exe",
+            "/opt/homebrew/bin/7z",
+            "/opt/homebrew/bin/7zz",
+            "/opt/homebrew/bin/7za",
+            "/usr/local/bin/7z",
+            "/usr/local/bin/7zz",
+            "/usr/local/bin/7za",
+        ]
+        .map(PathBuf::from),
+    );
+
+    for base in [
+        std::env::var_os("ProgramW6432"),
+        std::env::var_os("ProgramFiles"),
+        std::env::var_os("ProgramFiles(x86)"),
+        std::env::var_os("LOCALAPPDATA").map(|path| PathBuf::from(path).join("Programs").into()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let base = PathBuf::from(base);
+        for name in ["7z.exe", "7zz.exe", "7za.exe"] {
+            candidates.push(base.join("7-Zip").join(name));
+        }
+    }
+
+    candidates.extend(
+        [
+            r"C:\Program Files\7-Zip\7z.exe",
+            r"C:\Program Files\7-Zip\7zz.exe",
+            r"C:\Program Files\7-Zip\7za.exe",
+            r"C:\Program Files (x86)\7-Zip\7z.exe",
+            r"C:\Program Files (x86)\7-Zip\7zz.exe",
+            r"C:\Program Files (x86)\7-Zip\7za.exe",
+        ]
+        .map(PathBuf::from),
+    );
+
+    candidates
 }
 
 fn is_7z_executable(candidate: &Path) -> bool {
@@ -3654,6 +3706,18 @@ mod tests {
         assert!(dir.join("movie.iso").is_file());
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn seven_zip_candidates_include_windows_official_install_paths() {
+        let candidates = seven_zip_candidates(None);
+
+        assert!(candidates
+            .iter()
+            .any(|path| path == Path::new(r"C:\Program Files\7-Zip\7z.exe")));
+        assert!(candidates
+            .iter()
+            .any(|path| path == Path::new(r"C:\Program Files (x86)\7-Zip\7z.exe")));
     }
 
     #[test]

@@ -159,6 +159,11 @@ textarea {
   align-items: center;
 }
 
+.settings-gear-button {
+  height: var(--top-control-height);
+  width: var(--top-control-height);
+}
+
 .preview-option-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--top-control-height);
@@ -322,7 +327,7 @@ textarea {
 .progress-track {
   position: relative;
   height: 8px;
-  margin-top: 18px;
+  margin-top: 22px;
   overflow: visible;
   border-radius: 999px;
   background: var(--app-progress-track);
@@ -337,11 +342,11 @@ textarea {
 
 .progress-runner {
   position: absolute;
-  top: -32px;
+  top: -31px;
   z-index: 3;
   display: block;
-  width: 34px;
-  height: 34px;
+  width: 38px;
+  height: 28px;
   transform: translateX(-50%);
   transition: left 120ms linear;
   pointer-events: none;
@@ -349,33 +354,39 @@ textarea {
 }
 
 .progress-runner.is-failed {
-  top: -34px;
+  top: -32px;
 }
 
 .progress-dust {
   position: absolute;
-  top: 11px;
+  top: 2px;
   right: 26px;
-  font-size: 18px;
+  width: 24px;
+  height: 24px;
   opacity: 0.72;
   transform: scaleX(-1);
+  object-fit: contain;
 }
 
 .progress-car {
   position: absolute;
-  top: 1px;
+  top: 0;
   left: 50%;
-  font-size: 30px;
+  width: 34px;
+  height: 34px;
   transform: translateX(-50%) scaleX(-1);
+  object-fit: contain;
 }
 
 .progress-fire {
   position: absolute;
-  top: -4px;
+  top: -8px;
   left: 50%;
   z-index: 4;
-  font-size: 22px;
+  width: 26px;
+  height: 26px;
   transform: translateX(-50%);
+  object-fit: contain;
 }
 
 .progress-finish {
@@ -383,8 +394,9 @@ textarea {
   top: -24px;
   right: 0;
   z-index: 2;
-  font-size: 22px;
-  line-height: 1;
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
   pointer-events: none;
 }
 
@@ -651,7 +663,7 @@ select:focus-visible {
 
 .drive-row {
   display: grid;
-  grid-template-columns: minmax(0, var(--drive-control-width)) 78px var(--top-control-height);
+  grid-template-columns: minmax(0, var(--drive-control-width)) 78px var(--top-control-height) var(--top-control-height);
   width: max-content;
   max-width: 100%;
   gap: 8px;
@@ -1211,7 +1223,7 @@ select:focus-visible {
 
   .drive-row {
     width: 100%;
-    grid-template-columns: minmax(0, 1fr) 78px var(--top-control-height);
+    grid-template-columns: minmax(0, 1fr) 78px var(--top-control-height) var(--top-control-height);
   }
 
   .output-row {
