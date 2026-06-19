@@ -56,6 +56,8 @@ jobs:
             const appVersion = '${{ steps.version.outputs.app_version }}'
             const releaseVersion = '${{ steps.version.outputs.release_version }}'
             const upstreamTag = '${{ steps.version.outputs.upstream_tag }}'
+            const tagName = `v${releaseVersion}`
+            const releaseName = `Redumper UI ${releaseVersion}`
             const manifest = require('./.redumper/upstream.json')
             const targetTags = Object.entries(manifest.assets || {})
               .map(([target, asset]) => [target, asset.tag || manifest.tag])
@@ -65,12 +67,38 @@ jobs:
             const bundledLine = pinnedTargets.length
               ? `Bundled redumper: ${upstreamTag}; pinned targets: ${pinnedTargets.join(', ')}`
               : `Bundled redumper: ${upstreamTag}`
+            const body = `${bundledLine}\nInternal app version: ${appVersion}\n\nThis release includes redumper GPL-3.0 notices. See NOTICE.md in the repository.`
+
+            const owner = context.repo.owner
+            const repo = context.repo.repo
+
+            try {
+              const { data } = await github.rest.repos.getReleaseByTag({
+                owner,
+                repo,
+                tag: tagName
+              })
+              const updated = await github.rest.repos.updateRelease({
+                owner,
+                repo,
+                release_id: data.id,
+                name: releaseName,
+                body,
+                prerelease: false
+              })
+              return String(updated.data.id)
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error
+              }
+            }
+
             const { data } = await github.rest.repos.createRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              tag_name: `v${releaseVersion}`,
-              name: `Redumper UI ${releaseVersion}`,
-              body: `${bundledLine}\nInternal app version: ${appVersion}\n\nThis release includes redumper GPL-3.0 notices. See NOTICE.md in the repository.`,
+              tag_name: tagName,
+              name: releaseName,
+              body,
               draft: true,
               prerelease: false
             })
