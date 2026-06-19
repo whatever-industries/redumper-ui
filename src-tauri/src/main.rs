@@ -166,6 +166,59 @@ struct ExistingOutputConflict {
     matches: Vec<String>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct ExistingImageMatchContext {
+    volume_key: Option<String>,
+    no_volume_title: bool,
+}
+
+impl ExistingImageMatchContext {
+    fn from_drive(drive_volume_name: Option<String>, drive_label: Option<String>) -> Option<Self> {
+        let mut volume_candidates = Vec::new();
+        if let Some(value) = drive_volume_name.as_deref().and_then(non_empty_trimmed_string) {
+            volume_candidates.push(value);
+        }
+        if let Some(value) = drive_label.as_deref().and_then(volume_name_from_drive_label) {
+            volume_candidates.push(value);
+        }
+        let volume_name = volume_candidates
+            .iter()
+            .find(|value| !is_no_volume_title(value))
+            .cloned()
+            .or_else(|| volume_candidates.first().cloned());
+
+        let no_volume_title = volume_name
+            .as_deref()
+            .map(is_no_volume_title)
+            .unwrap_or_else(|| drive_label.as_deref().is_none_or(drive_label_has_no_volume_title));
+
+        Some(Self {
+            volume_key: volume_name
+                .as_deref()
+                .filter(|value| !is_no_volume_title(value))
+                .map(normalize_existing_image_match_text)
+                .filter(|value| !value.is_empty()),
+            no_volume_title,
+        })
+    }
+
+    fn matches(&self, directory: &Path, image_name: &str, files: &[String]) -> bool {
+        if let Some(volume_key) = &self.volume_key {
+            return existing_image_match_tokens(directory, image_name, files)
+                .into_iter()
+                .any(|token| token.contains(volume_key));
+        }
+
+        if self.no_volume_title {
+            return existing_image_match_tokens(directory, image_name, files)
+                .into_iter()
+                .any(|token| token_is_no_volume_title(&token));
+        }
+
+        true
+    }
+}
+
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct RunEvent {
@@ -349,8 +402,13 @@ fn list_drives(app: AppHandle) -> Result<Vec<DriveCandidate>, String> {
 #[tauri::command]
 fn find_existing_image_candidate(
     directory: String,
+    drive_volume_name: Option<String>,
+    drive_label: Option<String>,
 ) -> Result<Option<ExistingImageCandidate>, String> {
-    image_candidate_for_directory(Path::new(&directory))
+    image_candidate_for_directory(
+        Path::new(&directory),
+        ExistingImageMatchContext::from_drive(drive_volume_name, drive_label),
+    )
 }
 
 #[tauri::command]
@@ -1606,6 +1664,7 @@ fn split_command_line(input: &str) -> Result<Vec<String>, String> {
 
 fn image_candidate_for_directory(
     directory: &Path,
+    match_context: Option<ExistingImageMatchContext>,
 ) -> Result<Option<ExistingImageCandidate>, String> {
     if !directory.is_dir() {
         return Ok(None);
@@ -1663,6 +1722,12 @@ fn image_candidate_for_directory(
         .unwrap_or_default()
         .to_string();
 
+    if let Some(context) = match_context {
+        if !context.matches(directory, &image_name, &files) {
+            return Ok(None);
+        }
+    }
+
     Ok(Some(ExistingImageCandidate {
         directory: directory.to_string_lossy().to_string(),
         image_name,
@@ -1715,6 +1780,83 @@ fn line_has_positive_number(line: &str) -> bool {
     line.split(|ch: char| !ch.is_ascii_digit())
         .filter(|value| !value.is_empty())
         .any(|value| value.parse::<u64>().unwrap_or(0) > 0)
+}
+
+fn existing_image_match_tokens(directory: &Path, image_name: &str, files: &[String]) -> Vec<String> {
+    let mut tokens = vec![normalize_existing_image_match_text(image_name)];
+    if let Some(name) = directory.file_name().and_then(|value| value.to_str()) {
+        tokens.push(normalize_existing_image_match_text(name));
+    }
+    tokens.extend(files.iter().map(|file| normalize_existing_image_match_text(file)));
+    tokens.into_iter().filter(|token| !token.is_empty()).collect()
+}
+
+fn normalize_existing_image_match_text(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect::<String>()
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("_")
+}
+
+fn non_empty_trimmed_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn volume_name_from_drive_label(label: &str) -> Option<String> {
+    let start = label.rfind('(')?;
+    let end = label[start + 1..].find(')')? + start + 1;
+    let value = label[start + 1..end].trim();
+    if value.is_empty() || looks_like_drive_model_label(value) {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn looks_like_drive_model_label(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains("bd-")
+        || lower.contains("dvd")
+        || lower.contains("cd")
+        || lower.contains("optical")
+        || lower.contains("drive")
+        || lower.contains("hl-dt-st")
+        || lower.contains("matshita")
+        || lower.contains("plextor")
+        || lower.contains("pioneer")
+        || lower.contains("asus")
+        || lower.contains("tsstcorp")
+}
+
+fn drive_label_has_no_volume_title(label: &str) -> bool {
+    volume_name_from_drive_label(label)
+        .as_deref()
+        .map(is_no_volume_title)
+        .unwrap_or(true)
+}
+
+fn is_no_volume_title(value: &str) -> bool {
+    token_is_no_volume_title(&normalize_existing_image_match_text(value))
+}
+
+fn token_is_no_volume_title(token: &str) -> bool {
+    token.is_empty()
+        || token == "not_applicable"
+        || token == "no_file_system"
+        || token.contains("not_applicable_no_file_system")
+        || token.contains("no_volume")
+        || token.contains("untitled")
 }
 
 fn file_extension(path: &Path) -> Option<String> {
@@ -3394,7 +3536,7 @@ mod tests {
         )
         .unwrap();
 
-        let candidate = image_candidate_for_directory(&dir).unwrap().unwrap();
+        let candidate = image_candidate_for_directory(&dir, None).unwrap().unwrap();
 
         assert_eq!(candidate.image_name, "sample");
         assert_eq!(
@@ -3420,7 +3562,7 @@ mod tests {
         )
         .unwrap();
 
-        let candidate = image_candidate_for_directory(&dir).unwrap().unwrap();
+        let candidate = image_candidate_for_directory(&dir, None).unwrap().unwrap();
 
         assert_eq!(candidate.image_name, "sample");
 
@@ -3443,7 +3585,7 @@ mod tests {
         )
         .unwrap();
 
-        let candidate = image_candidate_for_directory(&dir).unwrap().unwrap();
+        let candidate = image_candidate_for_directory(&dir, None).unwrap().unwrap();
 
         assert_eq!(candidate.image_name, "sample");
 
@@ -3462,9 +3604,85 @@ mod tests {
         )
         .unwrap();
 
-        let candidate = image_candidate_for_directory(&dir).unwrap().unwrap();
+        let candidate = image_candidate_for_directory(&dir, None).unwrap().unwrap();
 
         assert_eq!(candidate.image_name, "sample");
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn finds_refine_candidate_when_volume_name_matches_drive() {
+        let dir = test_temp_dir("scram-volume-match");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("051128_1105_20260618-2036.scram"), b"scrambled data").unwrap();
+        fs::write(dir.join("051128_1105_20260618-2036.log"), "C2: 903 samples").unwrap();
+
+        let candidate = image_candidate_for_directory(
+            &dir,
+            ExistingImageMatchContext::from_drive(
+                Some("051128_1105".to_string()),
+                Some("disk10 (051128_1105)".to_string()),
+            ),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(candidate.image_name, "051128_1105_20260618-2036");
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn ignores_refine_candidate_when_volume_name_does_not_match_drive() {
+        let dir = test_temp_dir("scram-volume-mismatch");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("other_disc_20260618-2036.scram"), b"scrambled data").unwrap();
+        fs::write(dir.join("other_disc_20260618-2036.log"), "SCSI: 4 samples").unwrap();
+
+        let candidate = image_candidate_for_directory(
+            &dir,
+            ExistingImageMatchContext::from_drive(
+                Some("051128_1105".to_string()),
+                Some("disk10 (051128_1105)".to_string()),
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(candidate, None);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn finds_refine_candidate_for_no_volume_title_drive() {
+        let dir = test_temp_dir("scram-no-volume");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("not_applicable_no_file_system_20260618-1455.scram"),
+            b"scrambled data",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("not_applicable_no_file_system_20260618-1455.log"),
+            "SCSI: 4 samples",
+        )
+        .unwrap();
+
+        let candidate = image_candidate_for_directory(
+            &dir,
+            ExistingImageMatchContext::from_drive(
+                Some("Not Applicable (No File System)".to_string()),
+                Some("disk10".to_string()),
+            ),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(candidate.image_name, "not_applicable_no_file_system_20260618-1455");
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -3486,7 +3704,7 @@ media errors:
         )
         .unwrap();
 
-        let candidate = image_candidate_for_directory(&dir).unwrap();
+        let candidate = image_candidate_for_directory(&dir, None).unwrap();
 
         assert_eq!(candidate, None);
 
@@ -3502,7 +3720,7 @@ media errors:
         fs::write(dir.join("sample.bin"), b"bin data").unwrap();
         fs::write(dir.join("sample.log"), "C2: 903 samples").unwrap();
 
-        let candidate = image_candidate_for_directory(&dir).unwrap();
+        let candidate = image_candidate_for_directory(&dir, None).unwrap();
 
         assert_eq!(candidate, None);
 

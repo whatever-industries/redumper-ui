@@ -449,24 +449,6 @@ textarea {
   color: #ff9a84;
 }
 
-.progress-warning {
-  margin-top: 8px;
-  border-radius: 5px;
-  border: 1px solid rgba(190, 65, 44, 0.55);
-  background: rgba(190, 65, 44, 0.08);
-  padding: 6px 8px;
-  color: #9d321f;
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.25;
-}
-
-.app-shell[data-theme="dark"] .progress-warning {
-  border-color: rgba(255, 128, 102, 0.5);
-  background: rgba(255, 128, 102, 0.1);
-  color: #ffb09e;
-}
-
 .metric-label {
   color: var(--app-muted);
   font-size: 13px;

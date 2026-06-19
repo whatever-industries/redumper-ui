@@ -236,8 +236,7 @@ export default function App() {
   );
   const validationErrors = useMemo(() => validateRunRequest(runRequest), [runRequest]);
   const progressPercent = Math.min(Math.max(progress?.percentage ?? 0, 0), 100);
-  const remainingErrorSummary = progressErrorSummary(progress);
-  const hasRemainingErrors = remainingErrorSummary.length > 0;
+  const hasRemainingErrors = progressHasErrors(progress);
   const raceComplete = !runFailed && !hasRemainingErrors && !cancelRequested && visualProgressPercent >= 99.5;
   const isCdProgress = progress?.c2Errors != null || progress?.qErrors != null;
   const refineRunRequest = useMemo(
@@ -559,10 +558,15 @@ export default function App() {
 
       setExistingImageChecking(true);
       try {
+        const driveContext = {
+          driveVolumeName: selectedDrive?.volumeName ?? volumeNameFromDriveLabel(selectedDrive?.label),
+          driveLabel: selectedDrive?.label ?? undefined
+        };
         const candidate =
-          (await invoke<ExistingImageCandidate | null>("find_existing_image_candidate", { directory: imagePath })) ??
+          (await invoke<ExistingImageCandidate | null>("find_existing_image_candidate", { directory: imagePath, ...driveContext })) ??
           (await invoke<ExistingImageCandidate | null>("find_existing_image_candidate", {
-            directory: joinPath(imagePath, effectiveImageName)
+            directory: joinPath(imagePath, effectiveImageName),
+            ...driveContext
           }));
         if (!cancelled) {
           setExistingImageCandidate(candidate);
@@ -583,7 +587,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [effectiveImageName, existingImageScanVersion, imagePath]);
+  }, [effectiveImageName, existingImageScanVersion, imagePath, selectedDrive?.label, selectedDrive?.volumeName]);
 
   useEffect(() => {
     if (!isTauri) {
@@ -1323,7 +1327,6 @@ export default function App() {
                       alert={(progress?.c2Errors ?? 0) > 0 || (progress?.qErrors ?? 0) > 0}
                     />
                   </div>
-                  {hasRemainingErrors ? <div className="progress-warning">Errors remain: {remainingErrorSummary.join(", ")}</div> : null}
                 </div>
 
                 <div className="action-row">
@@ -2167,6 +2170,18 @@ function suggestImageName(label: string, stamp: string) {
     .replace(/^_+|_+$/g, "")
     .toLowerCase();
   return `${normalized || "disc"}_${stamp}`;
+}
+
+function volumeNameFromDriveLabel(label: string | null | undefined) {
+  if (!label) {
+    return undefined;
+  }
+  const parenthesized = label.trim().match(/\(([^()]+)\)\s*$/);
+  const value = parenthesized?.[1]?.trim();
+  if (!value || looksLikeDriveModel(value)) {
+    return undefined;
+  }
+  return value;
 }
 
 function outputNameBaseFromDriveLabel(label: string) {
