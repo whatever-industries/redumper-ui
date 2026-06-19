@@ -359,8 +359,8 @@ textarea {
 
 .progress-dust {
   position: absolute;
-  top: 2px;
-  right: 26px;
+  top: 5px;
+  right: 30px;
   width: 24px;
   height: 24px;
   opacity: 0.72;
@@ -370,7 +370,7 @@ textarea {
 
 .progress-car {
   position: absolute;
-  top: 0;
+  top: -3px;
   left: 50%;
   width: 34px;
   height: 34px;
@@ -427,6 +427,44 @@ textarea {
 .metric.is-inactive {
   opacity: 0.38;
   filter: grayscale(1);
+}
+
+.metric.has-alert {
+  border-color: rgba(190, 65, 44, 0.8);
+  background: rgba(190, 65, 44, 0.08);
+}
+
+.metric.has-alert .metric-label,
+.metric.has-alert .metric-value {
+  color: #be412c;
+}
+
+.app-shell[data-theme="dark"] .metric.has-alert {
+  border-color: rgba(255, 128, 102, 0.75);
+  background: rgba(255, 128, 102, 0.12);
+}
+
+.app-shell[data-theme="dark"] .metric.has-alert .metric-label,
+.app-shell[data-theme="dark"] .metric.has-alert .metric-value {
+  color: #ff9a84;
+}
+
+.progress-warning {
+  margin-top: 8px;
+  border-radius: 5px;
+  border: 1px solid rgba(190, 65, 44, 0.55);
+  background: rgba(190, 65, 44, 0.08);
+  padding: 6px 8px;
+  color: #9d321f;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.app-shell[data-theme="dark"] .progress-warning {
+  border-color: rgba(255, 128, 102, 0.5);
+  background: rgba(255, 128, 102, 0.1);
+  color: #ffb09e;
 }
 
 .metric-label {

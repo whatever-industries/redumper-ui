@@ -183,6 +183,7 @@ export default function App() {
   const settingsWindowRef = useRef<HTMLElement | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
   const commandTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const progressRef = useRef<RunEvent["progress"] | null>(null);
   const cancelRequestedRef = useRef(false);
   const activeTheme = themeMode === "system" ? (systemPrefersDark ? "dark" : "light") : themeMode;
 
@@ -235,7 +236,9 @@ export default function App() {
   );
   const validationErrors = useMemo(() => validateRunRequest(runRequest), [runRequest]);
   const progressPercent = Math.min(Math.max(progress?.percentage ?? 0, 0), 100);
-  const raceComplete = !runFailed && !cancelRequested && visualProgressPercent >= 99.5;
+  const remainingErrorSummary = progressErrorSummary(progress);
+  const hasRemainingErrors = remainingErrorSummary.length > 0;
+  const raceComplete = !runFailed && !hasRemainingErrors && !cancelRequested && visualProgressPercent >= 99.5;
   const isCdProgress = progress?.c2Errors != null || progress?.qErrors != null;
   const refineRunRequest = useMemo(
     () => buildExistingImageRunRequest("refine", existingImageCandidate, runRequest, drive),
@@ -634,6 +637,7 @@ export default function App() {
   function handleRunEvent(event: RunEvent) {
     if (event.kind === "started") {
       cancelRequestedRef.current = false;
+      progressRef.current = null;
       setRunning(true);
       setCancelRequested(false);
       setRunFailed(false);
@@ -648,6 +652,7 @@ export default function App() {
       setStage(event.stage);
     }
     if (event.progress) {
+      progressRef.current = event.progress;
       setProgress(event.progress);
     }
     if (event.duplicateIsoPath) {
@@ -662,17 +667,21 @@ export default function App() {
     }
     if (event.kind === "exit") {
       const wasCancelled = cancelRequestedRef.current;
+      const finalProgress = event.progress ?? progressRef.current;
+      const finishedWithErrors = progressHasErrors(finalProgress);
       setRunning(false);
       setCancelRequested(false);
       cancelRequestedRef.current = false;
       setActiveDriveLabel("");
-      setRunFailed(!wasCancelled && typeof event.exitCode === "number" && event.exitCode !== 0);
-      setStage(wasCancelled ? "Idle" : "END");
+      setRunFailed(!wasCancelled && (finishedWithErrors || (typeof event.exitCode === "number" && event.exitCode !== 0)));
+      setStage(wasCancelled ? "Idle" : finishedWithErrors ? "Errors Remain" : "END");
       if (wasCancelled) {
+        progressRef.current = null;
         setProgress(null);
         setVisualProgressPercent(0);
       } else {
-        setVisualProgressPercent((current) => (event.exitCode === 0 ? 100 : current));
+        const finalProgressPercent = progressPercentage(finalProgress);
+        setVisualProgressPercent((current) => (event.exitCode === 0 && !finishedWithErrors ? 100 : Math.max(current, finalProgressPercent)));
         setExistingImageScanVersion((version) => version + 1);
       }
       pushLog("exit", `redumper exited${typeof event.exitCode === "number" ? ` with code ${event.exitCode}` : ""}`);
@@ -807,13 +816,16 @@ export default function App() {
     }
 
     const matchList = conflict.matches.length ? `\n\nExisting files:\n${conflict.matches.join("\n")}` : "";
-    const overwrite = await ask(
-      `Output already exists in:\n${conflict.directory}${matchList}\n\nOverwrite and continue?`,
-      { title: "Overwrite existing dump?", kind: "warning" }
+    const isRefine = request.command === "refine";
+    const confirmed = await ask(
+      isRefine
+        ? `Refine will use the existing dump files in:\n${conflict.directory}${matchList}\n\nRedumper may update or replace files while refining. Continue?`
+        : `Output already exists in:\n${conflict.directory}${matchList}\n\nOverwrite and continue?`,
+      { title: isRefine ? "Refine existing image?" : "Overwrite existing dump?", kind: "warning" }
     );
 
-    if (!overwrite) {
-      pushLog("info", "Dump cancelled before launch; existing output was left untouched.");
+    if (!confirmed) {
+      pushLog("info", isRefine ? "Refine cancelled before launch." : "Dump cancelled before launch; existing output was left untouched.");
       return null;
     }
 
@@ -1302,10 +1314,16 @@ export default function App() {
                   <div className="metric-grid mt-2 grid grid-cols-5 gap-2 text-xs">
                     <SpeedometerMetric speed={driveSpeed} stage={stage} running={running} progressPercent={progressPercent} />
                     <Metric label="LBA" value={<LbaValue progress={progress} />} />
-                    <Metric label="SCSI" value={progress?.scsiErrors ?? 0} />
-                    <Metric label="EDC" value={progress?.edcErrors ?? 0} />
-                    <Metric label="C2/Q" value={`${progress?.c2Errors ?? 0}/${progress?.qErrors ?? 0}`} inactive={!isCdProgress} />
+                    <Metric label="SCSI" value={progress?.scsiErrors ?? 0} alert={(progress?.scsiErrors ?? 0) > 0} />
+                    <Metric label="EDC" value={progress?.edcErrors ?? 0} alert={(progress?.edcErrors ?? 0) > 0} />
+                    <Metric
+                      label="C2/Q"
+                      value={`${progress?.c2Errors ?? 0}/${progress?.qErrors ?? 0}`}
+                      inactive={!isCdProgress}
+                      alert={(progress?.c2Errors ?? 0) > 0 || (progress?.qErrors ?? 0) > 0}
+                    />
                   </div>
+                  {hasRemainingErrors ? <div className="progress-warning">Errors remain: {remainingErrorSummary.join(", ")}</div> : null}
                 </div>
 
                 <div className="action-row">
@@ -2074,9 +2092,27 @@ function IconButton({
   );
 }
 
-function Metric({ label, value, inactive = false }: { label: string; value: React.ReactNode; inactive?: boolean }) {
+function progressPercentage(progress: RunEvent["progress"] | null | undefined) {
+  return Math.min(Math.max(progress?.percentage ?? 0, 0), 100);
+}
+
+function progressErrorSummary(progress: RunEvent["progress"] | null | undefined) {
+  const errors = [
+    ["SCSI", progress?.scsiErrors ?? 0],
+    ["EDC", progress?.edcErrors ?? 0],
+    ["C2", progress?.c2Errors ?? 0],
+    ["Q", progress?.qErrors ?? 0]
+  ];
+  return errors.filter(([, count]) => Number(count) > 0).map(([label, count]) => `${label} ${count}`);
+}
+
+function progressHasErrors(progress: RunEvent["progress"] | null | undefined) {
+  return progressErrorSummary(progress).length > 0;
+}
+
+function Metric({ label, value, inactive = false, alert = false }: { label: string; value: React.ReactNode; inactive?: boolean; alert?: boolean }) {
   return (
-    <div className={clsx("metric min-w-0 rounded px-2 py-1", inactive && "is-inactive")}>
+    <div className={clsx("metric min-w-0 rounded px-2 py-1", inactive && "is-inactive", alert && "has-alert")}>
       <div className="metric-label truncate uppercase">{label}</div>
       <div className="metric-value truncate">{value}</div>
     </div>
