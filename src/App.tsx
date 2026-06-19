@@ -63,9 +63,11 @@ const SETTINGS_STORAGE_KEYS = {
 } as const;
 const COMPACT_WINDOW_WIDTH = 560;
 const LOG_BODY_HEIGHT = 220;
+const MIN_LOG_BODY_HEIGHT = 140;
 const MAIN_MIN_WINDOW_HEIGHT = 340;
 const MAIN_MAX_WINDOW_HEIGHT = 900;
 const MAIN_WINDOW_RESIZE_BUFFER = 4;
+const WINDOW_SCREEN_MARGIN = 32;
 const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: "general", label: "General" },
   { id: "cd", label: "CD Dump" },
@@ -179,6 +181,7 @@ export default function App() {
   const [deletingDuplicateIso, setDeletingDuplicateIso] = useState(false);
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [logExpanded, setLogExpanded] = useState(false);
+  const [logBodyHeight, setLogBodyHeight] = useState(LOG_BODY_HEIGHT);
   const [existingImageScanVersion, setExistingImageScanVersion] = useState(0);
   const appMainRef = useRef<HTMLElement | null>(null);
   const settingsWindowRef = useRef<HTMLElement | null>(null);
@@ -239,8 +242,10 @@ export default function App() {
   const progressPercent = Math.min(Math.max(progress?.percentage ?? 0, 0), 100);
   const hasRemainingErrors = progressHasErrors(progress);
   const raceComplete = !runFailed && !hasRemainingErrors && !cancelRequested && visualProgressPercent >= 99.5;
+  const raceFill = visualProgressPercent <= 0 ? "0%" : raceComplete ? "100%" : "var(--race-position)";
   const racePositionStyle = {
-    "--race-position": `clamp(16px, ${visualProgressPercent}%, calc(100% - 34px))`
+    "--race-position": `clamp(16px, ${visualProgressPercent}%, calc(100% - 34px))`,
+    "--race-fill": raceFill
   } as CSSProperties;
   const isCdProgress = progress?.c2Errors != null || progress?.qErrors != null;
   const refineRunRequest = useMemo(
@@ -1035,16 +1040,31 @@ export default function App() {
   async function resizeMainWindowForLog(targetLogExpanded = logExpanded, currentLogExpanded = logExpanded) {
     const windowRef = getCurrentWindow();
     const chromeHeight = await mainWindowChromeHeight(windowRef, appInfo.platform);
-    const measuredHeight = estimateMainContentHeight(appMainRef.current, currentLogExpanded, targetLogExpanded) ?? document.documentElement.scrollHeight;
-    const nextHeight = clampWindowHeight(measuredHeight + chromeHeight + MAIN_WINDOW_RESIZE_BUFFER);
+    const maxWindowHeight = maxVisibleMainWindowHeight();
+    let targetLogBodyHeight = targetLogExpanded ? LOG_BODY_HEIGHT : logBodyHeight;
+    let measuredHeight =
+      estimateMainContentHeight(appMainRef.current, currentLogExpanded, targetLogExpanded, logBodyHeight, targetLogBodyHeight) ??
+      document.documentElement.scrollHeight;
+    let nextHeight = measuredHeight + chromeHeight + MAIN_WINDOW_RESIZE_BUFFER;
+    if (targetLogExpanded && nextHeight > maxWindowHeight) {
+      targetLogBodyHeight = Math.max(MIN_LOG_BODY_HEIGHT, LOG_BODY_HEIGHT - (nextHeight - maxWindowHeight));
+      measuredHeight =
+        estimateMainContentHeight(appMainRef.current, currentLogExpanded, targetLogExpanded, logBodyHeight, targetLogBodyHeight) ??
+        document.documentElement.scrollHeight;
+      nextHeight = measuredHeight + chromeHeight + MAIN_WINDOW_RESIZE_BUFFER;
+    }
+    if (targetLogExpanded) {
+      setLogBodyHeight(targetLogBodyHeight);
+    }
+    const clampedHeight = clampWindowHeight(nextHeight, maxWindowHeight);
     const nextWidth = COMPACT_WINDOW_WIDTH;
-    await windowRef.setSize(new LogicalSize(nextWidth, nextHeight));
+    await windowRef.setSize(new LogicalSize(nextWidth, clampedHeight));
 
     await new Promise((resolve) => window.requestAnimationFrame(resolve));
     window.scrollTo({ top: 0, left: 0 });
     const overflow = document.documentElement.scrollHeight - window.innerHeight;
-    if (overflow > 1) {
-      await windowRef.setSize(new LogicalSize(nextWidth, clampWindowHeight(nextHeight + overflow + 2)));
+    if (overflow > 1 && clampedHeight < maxWindowHeight) {
+      await windowRef.setSize(new LogicalSize(nextWidth, clampWindowHeight(clampedHeight + overflow + 2, maxWindowHeight)));
       await new Promise((resolve) => window.requestAnimationFrame(resolve));
       window.scrollTo({ top: 0, left: 0 });
     }
@@ -1448,7 +1468,11 @@ export default function App() {
             </div>
 
             {logExpanded ? (
-              <div ref={logBodyRef} className="log-body overflow-auto border-t border-white/10 p-3 font-mono text-xs leading-5">
+              <div
+                ref={logBodyRef}
+                className="log-body overflow-auto border-t border-white/10 p-3 font-mono text-xs leading-5"
+                style={{ height: logBodyHeight }}
+              >
                 {logs.length === 0 ? <div className="text-white/35">Waiting for output</div> : null}
                 {logs.map((line) => (
                   <div key={line.id} className={clsx("log-line", line.level, line.kind)}>
@@ -1501,14 +1525,21 @@ function measuredChildrenHeight(element: HTMLElement | null) {
   return Array.from(element.children).reduce((height, child) => height + child.getBoundingClientRect().height, 0);
 }
 
-function estimateMainContentHeight(element: HTMLElement | null, currentLogExpanded: boolean, targetLogExpanded: boolean) {
+function estimateMainContentHeight(
+  element: HTMLElement | null,
+  currentLogExpanded: boolean,
+  targetLogExpanded: boolean,
+  currentLogBodyHeight: number,
+  targetLogBodyHeight: number
+) {
   const measuredHeight = measuredChildrenHeight(element);
-  if (measuredHeight === null || currentLogExpanded === targetLogExpanded) {
-    return measuredHeight;
+  if (measuredHeight === null) {
+    return null;
   }
 
-  const logBodyDelta = LOG_BODY_HEIGHT + 1;
-  return measuredHeight + (targetLogExpanded ? logBodyDelta : -logBodyDelta);
+  const currentLogBodyDelta = currentLogExpanded ? currentLogBodyHeight + 1 : 0;
+  const targetLogBodyDelta = targetLogExpanded ? targetLogBodyHeight + 1 : 0;
+  return measuredHeight - currentLogBodyDelta + targetLogBodyDelta;
 }
 
 async function mainWindowChromeHeight(windowRef: ReturnType<typeof getCurrentWindow>, platform: string) {
@@ -1522,8 +1553,13 @@ async function mainWindowChromeHeight(windowRef: ReturnType<typeof getCurrentWin
   return Math.max(0, (outerSize.height - innerSize.height) / scaleFactor);
 }
 
-function clampWindowHeight(height: number) {
-  return Math.min(Math.max(height, MAIN_MIN_WINDOW_HEIGHT), MAIN_MAX_WINDOW_HEIGHT);
+function clampWindowHeight(height: number, maxHeight = MAIN_MAX_WINDOW_HEIGHT) {
+  return Math.min(Math.max(height, MAIN_MIN_WINDOW_HEIGHT), maxHeight);
+}
+
+function maxVisibleMainWindowHeight() {
+  const availableHeight = Number.isFinite(window.screen?.availHeight) ? window.screen.availHeight - WINDOW_SCREEN_MARGIN : MAIN_MAX_WINDOW_HEIGHT;
+  return Math.min(MAIN_MAX_WINDOW_HEIGHT, Math.max(MAIN_MIN_WINDOW_HEIGHT, availableHeight));
 }
 
 function joinPath(parent: string, child: string) {

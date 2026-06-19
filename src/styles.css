@@ -348,7 +348,7 @@ textarea {
 
 .progress-fill {
   height: 100%;
-  width: var(--race-position);
+  width: var(--race-fill);
   border-radius: inherit;
   background: #0066cc;
   transition: width 120ms linear;
