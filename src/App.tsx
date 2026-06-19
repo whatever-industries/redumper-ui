@@ -2103,8 +2103,7 @@ function progressErrorSummary(progress: RunEvent["progress"] | null | undefined)
   const errors = [
     ["SCSI", progress?.scsiErrors ?? 0],
     ["EDC", progress?.edcErrors ?? 0],
-    ["C2", progress?.c2Errors ?? 0],
-    ["Q", progress?.qErrors ?? 0]
+    ["C2", progress?.c2Errors ?? 0]
   ];
   return errors.filter(([, count]) => Number(count) > 0).map(([label, count]) => `${label} ${count}`);
 }
