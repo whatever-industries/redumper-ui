@@ -1324,7 +1324,7 @@ export default function App() {
                       label="C2/Q"
                       value={`${progress?.c2Errors ?? 0}/${progress?.qErrors ?? 0}`}
                       inactive={!isCdProgress}
-                      alert={(progress?.c2Errors ?? 0) > 0 || (progress?.qErrors ?? 0) > 0}
+                      alert={(progress?.c2Errors ?? 0) > 0}
                     />
                   </div>
                 </div>
