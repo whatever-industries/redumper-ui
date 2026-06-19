@@ -6,6 +6,8 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Read};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -19,6 +21,8 @@ use tauri_plugin_updater::UpdaterExt;
 use tauri::menu::{Menu, MenuItem, Submenu};
 
 const RUN_EVENT: &str = "redumper://event";
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Default)]
 struct AppState {
@@ -1320,12 +1324,20 @@ fn recommended_drive_signatures(app: &AppHandle) -> Result<Vec<DriveSignature>, 
 }
 
 fn configure_redumper_command_environment(command: &mut Command, redumper_path: &Path) {
+    suppress_child_console(command);
     if let Some(resource_dir) = redumper_path.parent().and_then(|bin| bin.parent()) {
         let lib_dir = resource_dir.join("lib");
         if lib_dir.exists() {
             command.env("DYLD_LIBRARY_PATH", &lib_dir);
             command.env("LD_LIBRARY_PATH", &lib_dir);
         }
+    }
+}
+
+fn suppress_child_console(_command: &mut Command) {
+    #[cfg(windows)]
+    {
+        _command.creation_flags(CREATE_NO_WINDOW);
     }
 }
 
@@ -1968,7 +1980,9 @@ fn compress_candidates_with_7z(
     seven_zip: &Path,
 ) -> Result<(String, usize, usize), String> {
     let archive_name = archive_file_name(&request.output_directory, image_prefix, "7z");
-    let output = Command::new(seven_zip)
+    let mut command = Command::new(seven_zip);
+    suppress_child_console(&mut command);
+    let output = command
         .current_dir(&request.output_directory)
         .arg("a")
         .arg("-t7z")
@@ -2162,7 +2176,9 @@ fn seven_zip_candidates(custom_path: Option<&str>) -> Vec<PathBuf> {
 }
 
 fn is_7z_executable(candidate: &Path) -> bool {
-    Command::new(candidate)
+    let mut command = Command::new(candidate);
+    suppress_child_console(&mut command);
+    command
         .arg("--help")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -2543,6 +2559,7 @@ fn kill_pid(pid: u32, force: bool) -> Result<(), String> {
 #[cfg(windows)]
 fn kill_pid(pid: u32, force: bool) -> Result<(), String> {
     let mut cmd = Command::new("taskkill");
+    suppress_child_console(&mut cmd);
     cmd.arg("/PID").arg(pid.to_string()).arg("/T");
     if force {
         cmd.arg("/F");
@@ -2692,7 +2709,9 @@ fn windows_drive_candidates() -> Vec<DriveCandidate> {
 $drives = Get-CimInstance Win32_CDROMDrive | Select-Object Name, Drive, VolumeName, MediaLoaded;
 if ($null -eq $drives) { "[]" } else { $drives | ConvertTo-Json -Compress }
 "#;
-    let output = Command::new("powershell")
+    let mut command = Command::new("powershell");
+    suppress_child_console(&mut command);
+    let output = command
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .output();
 
@@ -2988,7 +3007,12 @@ fn parse_macos_diskutil_info_volume_name(text: &str) -> Option<String> {
 
 fn non_empty_macos_diskutil_value(value: &str) -> Option<String> {
     let value = value.trim();
-    if value.is_empty() || value == "Not applicable" || value == "(null)" {
+    let lower = value.to_ascii_lowercase();
+    if value.is_empty()
+        || lower == "(null)"
+        || lower.starts_with("not applicable")
+        || lower == "none"
+    {
         None
     } else {
         Some(value.to_string())
@@ -3379,6 +3403,14 @@ mod tests {
             )
             .as_deref(),
             Some("ASING_01_SCN")
+        );
+        assert_eq!(
+            parse_macos_diskutil_info_volume_name(
+                r#"   Volume Name:               Not applicable (no file system)
+   Optical Media Type:        DVD-ROM
+"#
+            ),
+            None
         );
     }
 

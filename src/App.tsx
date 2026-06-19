@@ -2138,13 +2138,29 @@ function SpeedometerMetric({ speed, stage, running, progressPercent }: { speed: 
 }
 
 function suggestImageName(label: string, stamp: string) {
-  const normalized = label
+  const normalized = outputNameBaseFromDriveLabel(label)
     .replace(/^\/dev\//, "")
     .replace(/^[A-Z]:\\?$/i, (drive) => drive.replace(":", ""))
     .replace(/[^a-z0-9]+/gi, "_")
     .replace(/^_+|_+$/g, "")
     .toLowerCase();
   return `${normalized || "disc"}_${stamp}`;
+}
+
+function outputNameBaseFromDriveLabel(label: string) {
+  const trimmed = label.trim();
+  const parenthesized = trimmed.match(/\(([^()]+)\)\s*$/);
+  if (parenthesized?.[1]) {
+    const value = parenthesized[1].trim();
+    if (value && !looksLikeDriveModel(value)) {
+      return value;
+    }
+  }
+  return trimmed;
+}
+
+function looksLikeDriveModel(value: string) {
+  return /\b(BD|BD-RE|DVD|DVD-ROM|CD|CD-ROM|HL-DT-ST|MATSHITA|PIONEER|PLEXTOR|ASUS|TSST|OPTIARC)\b/i.test(value);
 }
 
 function formatDateStamp(date: Date) {
