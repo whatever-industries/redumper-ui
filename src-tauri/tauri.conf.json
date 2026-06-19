@@ -13,10 +13,10 @@
     "windows": [
       {
         "title": "Redumper UI",
-        "width": 700,
-        "height": 430,
-        "minWidth": 660,
-        "minHeight": 400,
+        "width": 560,
+        "height": 380,
+        "minWidth": 540,
+        "minHeight": 340,
         "resizable": true
       }
     ],

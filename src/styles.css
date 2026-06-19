@@ -29,10 +29,10 @@ textarea {
 }
 
 .app-shell {
-  --drive-control-width: 280px;
-  --output-name-width: 320px;
-  --settings-control-width: 620px;
-  --settings-label-width: 100px;
+  --drive-control-width: 300px;
+  --output-name-width: 378px;
+  --settings-control-width: 520px;
+  --settings-label-width: 76px;
   --top-control-height: 34px;
   --app-bg: #efeee8;
   --app-panel: #fbfaf5;
@@ -93,7 +93,7 @@ textarea {
 .app-content {
   width: min(100%, 860px);
   margin-right: auto;
-  margin-left: 0;
+  margin-left: auto;
 }
 
 .app-shell[data-theme="dark"] {
@@ -120,8 +120,7 @@ textarea {
 
 .app-section-panel,
 .advanced-card,
-.preview-box,
-.progress-card {
+.preview-box {
   background: var(--app-panel);
   border-color: var(--app-border);
 }
@@ -137,13 +136,19 @@ textarea {
   column-gap: 6px;
 }
 
+.settings-form {
+  width: min(100%, calc(var(--settings-label-width) + 6px + var(--settings-control-width)));
+  margin-right: auto;
+  margin-left: auto;
+}
+
 .settings-label {
   display: flex;
   min-height: var(--top-control-height);
   align-items: center;
   justify-content: flex-start;
   color: var(--app-text);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   text-align: left;
   white-space: nowrap;
@@ -176,14 +181,16 @@ textarea {
 .command-settings-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
+  gap: 4px;
 }
 
 .command-row-heading {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: var(--settings-label-width) max-content max-content;
   min-height: var(--top-control-height);
   align-items: center;
-  gap: 12px;
+  column-gap: 6px;
+  row-gap: 4px;
   flex-wrap: wrap;
 }
 
@@ -196,14 +203,14 @@ textarea {
 }
 
 .command-textarea {
-  min-height: calc(var(--top-control-height) * 2.4);
+  min-height: calc(var(--top-control-height) * 2.05);
   height: auto;
   resize: none;
   overflow: hidden;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
-  line-height: 1.35;
-  padding: 7px 10px;
+  line-height: 1.28;
+  padding: 5px 9px;
   font-family: inherit;
 }
 
@@ -213,7 +220,7 @@ textarea {
   align-items: center;
   gap: 6px;
   color: var(--app-text);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   cursor: pointer;
   user-select: none;
@@ -324,10 +331,16 @@ textarea {
   color: var(--app-subtle);
 }
 
+.progress-stack {
+  display: grid;
+  gap: 6px;
+  padding-top: 0;
+}
+
 .progress-track {
   position: relative;
-  height: 8px;
-  margin-top: 22px;
+  height: 7px;
+  margin-top: 20px;
   overflow: visible;
   border-radius: 999px;
   background: var(--app-progress-track);
@@ -415,10 +428,10 @@ textarea {
 
 .metric {
   display: grid;
-  min-height: 54px;
+  min-height: 40px;
   align-content: center;
   justify-items: center;
-  row-gap: 4px;
+  row-gap: 2px;
   border: 1px solid var(--app-border);
   background: var(--app-metric-bg);
   text-align: center;
@@ -451,7 +464,7 @@ textarea {
 
 .metric-label {
   color: var(--app-muted);
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 400;
   text-align: center;
   letter-spacing: 0;
@@ -459,7 +472,7 @@ textarea {
 
 .metric-value {
   color: var(--app-subtle);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   text-align: center;
 }
@@ -471,8 +484,8 @@ textarea {
 }
 
 .lba-value span + span {
-  margin-top: 3px;
-  padding-top: 3px;
+  margin-top: 2px;
+  padding-top: 2px;
   width: 100%;
   border-top: 1px solid var(--app-border-strong);
 }
@@ -480,17 +493,16 @@ textarea {
 .speedometer-metric {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
   align-content: center;
+  justify-content: center;
   text-align: left;
 }
 
 .speedometer-main {
   display: grid;
-  grid-template-columns: 58px minmax(0, 1fr);
   width: 100%;
+  justify-content: center;
   align-items: center;
-  gap: 10px;
 }
 
 .speedometer-dial {
@@ -591,43 +603,6 @@ textarea {
   transform: translateX(-50%);
 }
 
-.speedometer-readout {
-  min-width: 0;
-  align-self: center;
-  text-align: left;
-}
-
-.speedometer-readout .metric-label,
-.speedometer-readout .metric-value {
-  text-align: left;
-}
-
-.speedometer-status {
-  display: flex;
-  min-height: 20px;
-  width: 100%;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  background: rgba(0, 102, 204, 0.1);
-  color: var(--app-subtle);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0;
-  line-height: 1.1;
-  text-align: center;
-}
-
-.speedometer-metric.is-running .speedometer-status {
-  background: rgba(0, 102, 204, 0.16);
-  color: #0066cc;
-}
-
-.app-shell[data-theme="dark"] .speedometer-metric.is-running .speedometer-status {
-  background: rgba(0, 102, 204, 0.22);
-  color: #8fc4ff;
-}
-
 button:focus-visible,
 input:focus-visible,
 select:focus-visible {
@@ -636,12 +611,12 @@ select:focus-visible {
 }
 
 .control {
-  min-height: 34px;
+  min-height: var(--top-control-height);
   width: 100%;
   border-radius: 6px;
   border: 1px solid var(--app-border-strong);
   background: var(--app-panel-alt);
-  padding: 0 10px;
+  padding: 0 9px;
   color: var(--app-text);
   font-size: 14px;
 }
@@ -676,26 +651,34 @@ select:focus-visible {
 }
 
 .speed-control {
-  width: 78px;
-  min-width: 78px;
+  width: 72px;
+  min-width: 72px;
   padding: 0 6px;
 }
 
 .drive-row {
-  display: grid;
-  grid-template-columns: minmax(0, var(--drive-control-width)) 78px var(--top-control-height) var(--top-control-height);
-  width: max-content;
+  display: flex;
+  width: 100%;
   max-width: 100%;
-  gap: 8px;
   align-items: center;
+  gap: 6px;
+}
+
+.drive-row .drive-control {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.drive-row .speed-control {
+  flex: 0 0 72px;
 }
 
 .output-row {
   display: grid;
-  grid-template-columns: minmax(0, var(--output-name-width)) var(--top-control-height) max-content;
+  grid-template-columns: minmax(0, 1fr) var(--top-control-height);
   align-items: center;
-  gap: 8px;
-  width: max-content;
+  gap: 6px;
+  width: 100%;
   max-width: 100%;
 }
 
@@ -753,7 +736,7 @@ select:focus-visible {
 .primary-button,
 .secondary-button {
   display: inline-flex;
-  min-height: 42px;
+  min-height: 38px;
   flex: 1;
   align-items: center;
   justify-content: center;
@@ -785,12 +768,17 @@ select:focus-visible {
 .action-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 7px;
   justify-content: center;
 }
 
 .workflow-column {
+  display: grid;
+  gap: 10px;
+  width: 100%;
   max-width: var(--settings-control-width);
+  margin-right: auto;
+  margin-left: auto;
 }
 
 .action-row .primary-button {
@@ -855,13 +843,15 @@ select:focus-visible {
 }
 
 .drive-row .icon-button {
+  flex: 0 0 var(--top-control-height);
   height: var(--top-control-height);
+  min-width: var(--top-control-height);
   width: var(--top-control-height);
 }
 
 .eject-button {
-  height: 42px;
-  width: 42px;
+  height: 38px;
+  width: 38px;
   border-color: transparent;
   background: #0066cc;
   color: #ffffff;
@@ -872,8 +862,8 @@ select:focus-visible {
 }
 
 .eject-button svg {
-  height: 28px;
-  width: 28px;
+  height: 26px;
+  width: 26px;
 }
 
 .icon-dark {
@@ -893,6 +883,24 @@ select:focus-visible {
   grid-template-columns: minmax(0, 1fr);
   row-gap: 2px;
   padding: 0 10px 8px;
+}
+
+.firmware-warning {
+  border-radius: 4px;
+  background: rgba(190, 65, 44, 0.12);
+  color: #be412c;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1;
+  margin: 4px 4px 2px;
+  padding: 6px 8px;
+  text-align: center;
+}
+
+.app-shell[data-theme="dark"] .firmware-warning {
+  background: rgba(255, 128, 102, 0.13);
+  color: #ff8066;
 }
 
 .option-row {
@@ -1219,7 +1227,7 @@ select:focus-visible {
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
 }
 
-@media (max-width: 760px) {
+@media (max-width: 520px) {
   .app-shell {
     --settings-control-width: 100%;
     --settings-label-width: 0px;
@@ -1243,7 +1251,11 @@ select:focus-visible {
 
   .drive-row {
     width: 100%;
-    grid-template-columns: minmax(0, 1fr) 78px var(--top-control-height) var(--top-control-height);
+  }
+
+  .drive-row .drive-control {
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   .output-row {

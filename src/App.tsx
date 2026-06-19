@@ -11,7 +11,6 @@ import {
   FileSearch,
   FolderOpen,
   Settings,
-  Play,
   RefreshCw,
   Save,
   SlidersHorizontal,
@@ -34,6 +33,8 @@ interface LogLine {
   kind?: "progress";
   text: string;
 }
+
+type ReplaceProgressMode = boolean | "transient";
 
 interface DuplicateIsoMatch {
   message: string;
@@ -60,9 +61,9 @@ const SETTINGS_STORAGE_KEYS = {
   firmwareForceFlash: "redumper-ui-firmware-force-flash",
   firmwareConfirmed: "redumper-ui-firmware-confirmed"
 } as const;
-const COMPACT_WINDOW_WIDTH = 700;
+const COMPACT_WINDOW_WIDTH = 560;
 const LOG_BODY_HEIGHT = 220;
-const MAIN_MIN_WINDOW_HEIGHT = 400;
+const MAIN_MIN_WINDOW_HEIGHT = 340;
 const MAIN_MAX_WINDOW_HEIGHT = 900;
 const MAIN_WINDOW_RESIZE_BUFFER = 4;
 const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
@@ -466,9 +467,15 @@ export default function App() {
     }
 
     let cancelled = false;
-    const frame = window.requestAnimationFrame(() => {
-      void resizeMainWindowToContent().catch(() => undefined);
-    });
+    const frames: number[] = [];
+    const timers = [0, 80, 250, 700].map((delay) =>
+      window.setTimeout(() => {
+        const frame = window.requestAnimationFrame(() => {
+          void resizeMainWindowToContent().catch(() => undefined);
+        });
+        frames.push(frame);
+      }, delay)
+    );
 
     async function resizeMainWindowToContent() {
       if (cancelled) {
@@ -479,9 +486,10 @@ export default function App() {
 
     return () => {
       cancelled = true;
-      window.cancelAnimationFrame(frame);
+      timers.forEach((timer) => window.clearTimeout(timer));
+      frames.forEach((frame) => window.cancelAnimationFrame(frame));
     };
-  }, [appInfo.platform, commandText, isSettingsWindow, logExpanded, logs.length]);
+  }, [appInfo.platform, appInfoLoading, commandMode, commandText, driveFieldLoading, drives.length, drivesReady, imageName, imagePath, isSettingsWindow, outputFieldLoading]);
 
   useEffect(() => {
     if (!commandTextareaRef.current) {
@@ -596,7 +604,7 @@ export default function App() {
     void checkForUpdates(true);
   }, []);
 
-  function pushLog(level: LogLine["level"], text: string, options: { replaceProgress?: boolean } = {}) {
+  function pushLog(level: LogLine["level"], text: string, options: { replaceProgress?: ReplaceProgressMode } = {}) {
     setLogs((current) => {
       if (options.replaceProgress) {
         const nextLine = {
@@ -606,7 +614,7 @@ export default function App() {
           text
         };
         const last = current.at(-1);
-        if (last?.kind === "progress") {
+        if (last && shouldReplaceProgressLog(last, options.replaceProgress)) {
           if (last.level === level && last.text === text) {
             return current;
           }
@@ -667,12 +675,13 @@ export default function App() {
     }
     if (event.line) {
       const level = event.kind === "warning" || event.kind === "error" || event.kind === "stderr" ? event.kind : "stdout";
-      pushLog(level as LogLine["level"], event.line, { replaceProgress: event.kind === "progress" });
+      pushLog(level as LogLine["level"], event.line, { replaceProgress: event.kind === "progress" ? true : event.stage === "END" ? "transient" : false });
     }
     if (event.kind === "exit") {
       const wasCancelled = cancelRequestedRef.current;
       const finalProgress = event.progress ?? progressRef.current;
       const finishedWithErrors = progressHasErrors(finalProgress);
+      const exitedCleanly = event.exitCode === 0;
       setRunning(false);
       setCancelRequested(false);
       cancelRequestedRef.current = false;
@@ -684,8 +693,15 @@ export default function App() {
         setProgress(null);
         setVisualProgressPercent(0);
       } else {
-        const finalProgressPercent = progressPercentage(finalProgress);
-        setVisualProgressPercent((current) => (event.exitCode === 0 && !finishedWithErrors ? 100 : Math.max(current, finalProgressPercent)));
+        if (exitedCleanly) {
+          const completeProgress = completeFinalProgress(finalProgress);
+          progressRef.current = completeProgress;
+          setProgress(completeProgress);
+          setVisualProgressPercent(100);
+        } else {
+          const finalProgressPercent = progressPercentage(finalProgress);
+          setVisualProgressPercent((current) => Math.max(current, finalProgressPercent));
+        }
         setExistingImageScanVersion((version) => version + 1);
       }
       pushLog("exit", `redumper exited${typeof event.exitCode === "number" ? ` with code ${event.exitCode}` : ""}`);
@@ -962,15 +978,13 @@ export default function App() {
       setLogExpanded(true);
       window.requestAnimationFrame(() => {
         logEndRef.current?.scrollIntoView({ block: "end" });
-        void resizeMainWindowForLog(true).catch(() => undefined);
       });
       return;
     }
 
     setLogExpanded(false);
-    window.requestAnimationFrame(() => {
-      void resizeMainWindowForLog(false).catch(() => undefined);
-    });
+    await new Promise((resolve) => window.requestAnimationFrame(resolve));
+    await resizeMainWindowForLog(false, false);
   }
 
   async function saveLog() {
@@ -1001,10 +1015,10 @@ export default function App() {
     }
   }
 
-  async function resizeMainWindowForLog(targetLogExpanded = logExpanded) {
+  async function resizeMainWindowForLog(targetLogExpanded = logExpanded, currentLogExpanded = logExpanded) {
     const windowRef = getCurrentWindow();
     const chromeHeight = await mainWindowChromeHeight(windowRef, appInfo.platform);
-    const measuredHeight = estimateMainContentHeight(appMainRef.current, logExpanded, targetLogExpanded) ?? document.documentElement.scrollHeight;
+    const measuredHeight = estimateMainContentHeight(appMainRef.current, currentLogExpanded, targetLogExpanded) ?? document.documentElement.scrollHeight;
     const nextHeight = clampWindowHeight(measuredHeight + chromeHeight + MAIN_WINDOW_RESIZE_BUFFER);
     const nextWidth = COMPACT_WINDOW_WIDTH;
     await windowRef.setSize(new LogicalSize(nextWidth, nextHeight));
@@ -1170,8 +1184,8 @@ export default function App() {
     <Tooltip.Provider delayDuration={180}>
       <div className="app-shell" data-theme={activeTheme}>
         <main ref={appMainRef} className="app-main">
-          <section className="app-section app-section-panel border-b px-5 py-4">
-            <div className="settings-form app-content grid gap-2">
+          <section className="app-section app-section-panel border-b px-4 pb-2 pt-3">
+            <div className="settings-form app-content grid gap-1.5">
               <SettingsRow label="Drive">
                 <div className="drive-row">
                   <select
@@ -1295,10 +1309,10 @@ export default function App() {
             </div>
           </section>
 
-          <section className="app-section border-b px-5 py-4">
-            <div className="app-content grid gap-4">
-              <div className="workflow-column space-y-3">
-                <div className="progress-card rounded-md border p-3">
+          <section className="app-section border-b px-4 py-2.5">
+            <div className="app-content grid gap-3">
+              <div className="workflow-column">
+                <div className="progress-stack">
                   <div className="progress-track">
                     <div
                       className={clsx("progress-runner", running && "is-running", runFailed && "is-failed")}
@@ -1312,17 +1326,17 @@ export default function App() {
                     <img className="progress-finish" src={raceComplete ? trophyIcon : flagIcon} alt="" aria-hidden="true" />
                     <div className="progress-fill" style={{ width: `${visualProgressPercent}%` }} />
                   </div>
-                  <div className="metric-grid mt-2 grid grid-cols-5 gap-2 text-xs">
-                    <SpeedometerMetric speed={driveSpeed} stage={stage} running={running} progressPercent={progressPercent} />
+                  <div className="metric-grid mt-1.5 grid grid-cols-6 gap-1 text-xs">
+                    <SpeedometerMetric running={running} progressPercent={progressPercent} />
                     <Metric label="LBA" value={<LbaValue progress={progress} />} />
                     <Metric label="SCSI" value={progress?.scsiErrors ?? 0} alert={(progress?.scsiErrors ?? 0) > 0} />
                     <Metric label="EDC" value={progress?.edcErrors ?? 0} alert={(progress?.edcErrors ?? 0) > 0} />
                     <Metric
-                      label="C2/Q"
-                      value={`${progress?.c2Errors ?? 0}/${progress?.qErrors ?? 0}`}
-                      inactive={!isCdProgress}
+                      label="C2"
+                      value={progress?.c2Errors ?? 0}
                       alert={(progress?.c2Errors ?? 0) > 0}
                     />
+                    <Metric label="Q" value={progress?.qErrors ?? 0} />
                   </div>
                 </div>
 
@@ -1335,7 +1349,7 @@ export default function App() {
                     {running ? (
                       <Square size={18} fill="currentColor" strokeWidth={0} />
                     ) : (
-                      <Play size={18} fill="currentColor" strokeWidth={0} />
+                      <DumpIcon />
                     )}
                     {running ? "Stop" : "Dump Disc"}
                   </button>
@@ -1895,6 +1909,8 @@ function FirmwareFlashSection({
     <section className="advanced-card firmware-card rounded-md border">
       <h3 className="advanced-card-title px-2.5 py-1.5 text-sm font-semibold">Firmware</h3>
       <div className="option-section-grid">
+        <div className="firmware-warning" role="alert">☠ UNTESTED ☠</div>
+
         <div className="option-row">
           <label className="option-toggle" htmlFor="firmware-command">
             <span className="option-label">Flash Type</span>
@@ -1991,6 +2007,14 @@ function EjectIcon() {
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
       <path d="M10.9 4.8 C11.5 4 12.5 4 13.1 4.8 L19.6 13 C20.3 13.9 19.6 15 18.5 15 H5.5 C4.4 15 3.7 13.9 4.4 13 Z" />
       <rect x="4.5" y="17" width="15" height="3.5" rx="1.75" />
+    </svg>
+  );
+}
+
+function DumpIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
+      <path transform="rotate(90 12 12)" d="M10.9 4.8 C11.5 4 12.5 4 13.1 4.8 L19.6 13 C20.3 13.9 19.6 15 18.5 15 H5.5 C4.4 15 3.7 13.9 4.4 13 Z" />
     </svg>
   );
 }
@@ -2107,6 +2131,48 @@ function progressPercentage(progress: RunEvent["progress"] | null | undefined) {
   return Math.min(Math.max(progress?.percentage ?? 0, 0), 100);
 }
 
+function completeFinalProgress(progress: RunEvent["progress"] | null | undefined): RunEvent["progress"] {
+  if (!progress) {
+    return { percentage: 100 };
+  }
+
+  const lbaTotal = Number.isFinite(progress.lbaTotal) ? progress.lbaTotal : undefined;
+  return {
+    ...progress,
+    percentage: 100,
+    lbaCurrent: lbaTotal ?? progress.lbaCurrent
+  };
+}
+
+function shouldReplaceProgressLog(line: LogLine | undefined, mode: ReplaceProgressMode | undefined) {
+  if (!mode || line?.kind !== "progress") {
+    return false;
+  }
+
+  return mode === true || isTransientProgressLog(line.text);
+}
+
+function isTransientProgressLog(text: string) {
+  const lower = text.toLowerCase();
+  if (lower.includes("lba:")) {
+    return false;
+  }
+
+  return (
+    lower.includes("skeleton") ||
+    lower.includes("hash") ||
+    lower.includes("crc") ||
+    lower.includes("md5") ||
+    lower.includes("sha1") ||
+    lower.includes("sha-1") ||
+    lower.includes("sha256") ||
+    lower.includes("sha-256") ||
+    lower.includes("calculat") ||
+    lower.includes("creat") ||
+    lower.includes("writ")
+  );
+}
+
 function progressErrorSummary(progress: RunEvent["progress"] | null | undefined) {
   const errors = [
     ["SCSI", progress?.scsiErrors ?? 0],
@@ -2141,11 +2207,9 @@ function LbaValue({ progress }: { progress: RunEvent["progress"] | null }) {
   );
 }
 
-function SpeedometerMetric({ speed, stage, running, progressPercent }: { speed: string; stage: string; running: boolean; progressPercent: number }) {
+function SpeedometerMetric({ running, progressPercent }: { running: boolean; progressPercent: number }) {
   const activePercent = running ? 80 : Math.min(100, Math.max(0, progressPercent));
   const needleAngle = running ? -58 + activePercent * 1.16 : -58;
-  const speedLabel = speed ? `${speed}x` : running ? "Auto" : "--x";
-  const statusText = running ? "Dumping in Progress..." : stage;
 
   return (
     <div
@@ -2160,11 +2224,7 @@ function SpeedometerMetric({ speed, stage, running, progressPercent }: { speed: 
           <span className="speedometer-needle" />
           <span className="speedometer-hub" />
         </div>
-        <div className="speedometer-readout">
-          <div className="metric-value truncate font-semibold">{running ? speedLabel : "--x"}</div>
-        </div>
       </div>
-      <div className="speedometer-status">{statusText}</div>
     </div>
   );
 }
