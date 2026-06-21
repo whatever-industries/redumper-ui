@@ -1,6 +1,7 @@
 #![cfg_attr(test, allow(dead_code))]
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+use crc32fast::Hasher as Crc32Hasher;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -21,6 +22,7 @@ use tauri_plugin_updater::UpdaterExt;
 use tauri::menu::{Menu, MenuItem, Submenu};
 
 const RUN_EVENT: &str = "redumper://event";
+const REDUMP_INFO_DISCS_URL: &str = "https://redump.info/discs";
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -175,10 +177,16 @@ struct ExistingImageMatchContext {
 impl ExistingImageMatchContext {
     fn from_drive(drive_volume_name: Option<String>, drive_label: Option<String>) -> Option<Self> {
         let mut volume_candidates = Vec::new();
-        if let Some(value) = drive_volume_name.as_deref().and_then(non_empty_trimmed_string) {
+        if let Some(value) = drive_volume_name
+            .as_deref()
+            .and_then(non_empty_trimmed_string)
+        {
             volume_candidates.push(value);
         }
-        if let Some(value) = drive_label.as_deref().and_then(volume_name_from_drive_label) {
+        if let Some(value) = drive_label
+            .as_deref()
+            .and_then(volume_name_from_drive_label)
+        {
             volume_candidates.push(value);
         }
         let volume_name = volume_candidates
@@ -190,7 +198,11 @@ impl ExistingImageMatchContext {
         let no_volume_title = volume_name
             .as_deref()
             .map(is_no_volume_title)
-            .unwrap_or_else(|| drive_label.as_deref().is_none_or(drive_label_has_no_volume_title));
+            .unwrap_or_else(|| {
+                drive_label
+                    .as_deref()
+                    .is_none_or(drive_label_has_no_volume_title)
+            });
 
         Some(Self {
             volume_key: volume_name
@@ -775,7 +787,7 @@ fn run_dump_twice_compare_workflow(
         .as_deref()
         .map(str::trim)
         .filter(|name| !name.is_empty())
-        .ok_or_else(|| "Dump Twice, Compare Hashes requires an image name".to_string())?
+        .ok_or_else(|| "Dump Twice if No Match requires an image name".to_string())?
         .to_string();
     let verify_image_name = format!("{base_image_name}_verify");
 
@@ -839,6 +851,52 @@ fn run_dump_twice_compare_workflow(
         emit_stage(
             &app_for_wait,
             &run_id_for_wait,
+            "REDUMP",
+            "Checking redump.info for a CRC32 match...".to_string(),
+        );
+
+        match redump_info_lookup_for_dump(&image_path, &base_image_name) {
+            Ok(lookup) if lookup.matched => {
+                emit_stage(
+                    &app_for_wait,
+                    &run_id_for_wait,
+                    "REDUMP",
+                    format!(
+                        "redump.info already has a match for CRC32 {}; skipping second dump.",
+                        lookup.crc32
+                    ),
+                );
+                archive_successful_dump(
+                    &app_for_wait,
+                    &run_id_for_wait,
+                    &first_request,
+                    &image_path,
+                    &base_image_name,
+                );
+                emit_exit(&app_for_wait, &run_id_for_wait, Some(0), None);
+                clear_active_run(&app_for_wait, &run_id_for_wait);
+                return;
+            }
+            Ok(lookup) => emit_stage(
+                &app_for_wait,
+                &run_id_for_wait,
+                "REDUMP",
+                format!(
+                    "No redump.info match for CRC32 {}; running second dump.",
+                    lookup.crc32
+                ),
+            ),
+            Err(message) => emit_warning(
+                &app_for_wait,
+                &run_id_for_wait,
+                "REDUMP",
+                format!("Unable to check redump.info ({message}); running second dump."),
+            ),
+        }
+
+        emit_stage(
+            &app_for_wait,
+            &run_id_for_wait,
             "DUMP 2",
             format!("Second dump will use image name {verify_image_name}."),
         );
@@ -887,24 +945,14 @@ fn run_dump_twice_compare_workflow(
             }
         }
 
-        if exit_code == Some(0) && first_request.compress_log_files {
-            emit_stage(
+        if exit_code == Some(0) {
+            archive_successful_dump(
                 &app_for_wait,
                 &run_id_for_wait,
-                "ARCHIVE",
-                "Archiving auxiliary dump files...".to_string(),
+                &first_request,
+                &image_path,
+                &base_image_name,
             );
-
-            let archive_request = ArchiveRequest {
-                output_directory: image_path.clone(),
-                image_name: Some(base_image_name.clone()),
-                archive_tool_path: first_request.archive_tool_path.clone(),
-                archive_format: first_request.archive_format,
-            };
-            match compress_log_files_into_archive(&archive_request) {
-                Ok(message) => emit_stage(&app_for_wait, &run_id_for_wait, "ARCHIVE", message),
-                Err(message) => emit_warning(&app_for_wait, &run_id_for_wait, "ARCHIVE", message),
-            }
         }
 
         emit_exit(&app_for_wait, &run_id_for_wait, exit_code, None);
@@ -912,6 +960,114 @@ fn run_dump_twice_compare_workflow(
     });
 
     Ok(run_id)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct RedumpInfoLookup {
+    crc32: String,
+    matched: bool,
+}
+
+fn redump_info_lookup_for_dump(
+    output_directory: &Path,
+    image_name: &str,
+) -> Result<RedumpInfoLookup, String> {
+    let dump_file = primary_dump_file(output_directory, image_name)?;
+    let crc32 = crc32_file(&dump_file)?;
+    let matched = redump_info_has_crc_match(&crc32)?;
+    Ok(RedumpInfoLookup { crc32, matched })
+}
+
+fn redump_info_has_crc_match(crc32: &str) -> Result<bool, String> {
+    let crc32 = normalize_crc32_query(crc32)?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .user_agent(format!("Redumper UI/{}", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| format!("unable to prepare redump.info request: {e}"))?;
+    let html = client
+        .get(REDUMP_INFO_DISCS_URL)
+        .query(&[("q", crc32.as_str())])
+        .send()
+        .map_err(|e| format!("redump.info request failed: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("redump.info returned an error: {e}"))?
+        .text()
+        .map_err(|e| format!("unable to read redump.info response: {e}"))?;
+    parse_redump_info_disc_count(&html)
+        .map(|count| count > 0)
+        .ok_or_else(|| "redump.info response did not include a recognizable disc count".to_string())
+}
+
+fn normalize_crc32_query(crc32: &str) -> Result<String, String> {
+    let normalized = crc32.trim().trim_start_matches("0x").to_ascii_lowercase();
+    if normalized.len() == 8 && normalized.chars().all(|value| value.is_ascii_hexdigit()) {
+        return Ok(normalized);
+    }
+
+    Err(format!("invalid CRC32 value: {crc32}"))
+}
+
+fn parse_redump_info_disc_count(html: &str) -> Option<u64> {
+    for line in html.lines() {
+        let lower = line.to_ascii_lowercase();
+        let Some(found_at) = lower.find("discs found") else {
+            continue;
+        };
+        let before = &lower[..found_at];
+        let digits_reversed: String = before
+            .chars()
+            .rev()
+            .skip_while(|value| !value.is_ascii_digit())
+            .take_while(|value| value.is_ascii_digit())
+            .collect();
+        if digits_reversed.is_empty() {
+            continue;
+        }
+        let digits: String = digits_reversed.chars().rev().collect();
+        if let Ok(count) = digits.parse() {
+            return Some(count);
+        }
+    }
+
+    let lower = html.to_ascii_lowercase();
+    if lower.contains("no discs found") {
+        Some(0)
+    } else if lower.contains("data-href=\"/disc/") || lower.contains("href=\"/disc/") {
+        Some(1)
+    } else {
+        None
+    }
+}
+
+fn archive_successful_dump(
+    app: &AppHandle,
+    run_id: &str,
+    request: &RunRequest,
+    image_path: &Path,
+    image_name: &str,
+) {
+    if !request.compress_log_files {
+        return;
+    }
+
+    emit_stage(
+        app,
+        run_id,
+        "ARCHIVE",
+        "Archiving auxiliary dump files...".to_string(),
+    );
+
+    let archive_request = ArchiveRequest {
+        output_directory: image_path.to_path_buf(),
+        image_name: Some(image_name.to_string()),
+        archive_tool_path: request.archive_tool_path.clone(),
+        archive_format: request.archive_format,
+    };
+    match compress_log_files_into_archive(&archive_request) {
+        Ok(message) => emit_stage(app, run_id, "ARCHIVE", message),
+        Err(message) => emit_warning(app, run_id, "ARCHIVE", message),
+    }
 }
 
 fn run_redumper_child(
@@ -1453,8 +1609,7 @@ fn validate_request(request: &RunRequest) -> Result<(), String> {
     if let Some(args) = parse_manual_command(request)? {
         if request.dump_twice_compare_hashes {
             return Err(
-                "Manual command editing is not available with Dump Twice, Compare Hashes"
-                    .to_string(),
+                "Manual command editing is not available with Dump Twice if No Match".to_string(),
             );
         }
         if args
@@ -1477,7 +1632,7 @@ fn validate_request(request: &RunRequest) -> Result<(), String> {
 
     if request.dump_twice_compare_hashes && !matches!(request.command.as_str(), "disc" | "dump") {
         return Err(
-            "Dump Twice, Compare Hashes is only available for disc and dump commands".to_string(),
+            "Dump Twice if No Match is only available for disc and dump commands".to_string(),
         );
     }
 
@@ -1488,7 +1643,7 @@ fn validate_request(request: &RunRequest) -> Result<(), String> {
             .map(|v| v.trim().is_empty())
             .unwrap_or(true)
     {
-        return Err("Dump Twice, Compare Hashes requires an image name".to_string());
+        return Err("Dump Twice if No Match requires an image name".to_string());
     }
 
     if image_name_required(&request.command)
@@ -1782,13 +1937,24 @@ fn line_has_positive_number(line: &str) -> bool {
         .any(|value| value.parse::<u64>().unwrap_or(0) > 0)
 }
 
-fn existing_image_match_tokens(directory: &Path, image_name: &str, files: &[String]) -> Vec<String> {
+fn existing_image_match_tokens(
+    directory: &Path,
+    image_name: &str,
+    files: &[String],
+) -> Vec<String> {
     let mut tokens = vec![normalize_existing_image_match_text(image_name)];
     if let Some(name) = directory.file_name().and_then(|value| value.to_str()) {
         tokens.push(normalize_existing_image_match_text(name));
     }
-    tokens.extend(files.iter().map(|file| normalize_existing_image_match_text(file)));
-    tokens.into_iter().filter(|token| !token.is_empty()).collect()
+    tokens.extend(
+        files
+            .iter()
+            .map(|file| normalize_existing_image_match_text(file)),
+    );
+    tokens
+        .into_iter()
+        .filter(|token| !token.is_empty())
+        .collect()
 }
 
 fn normalize_existing_image_match_text(value: &str) -> String {
@@ -1990,6 +2156,25 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     }
 
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn crc32_file(path: &Path) -> Result<String, String> {
+    let mut file =
+        fs::File::open(path).map_err(|e| format!("Unable to hash {}: {e}", path.display()))?;
+    let mut hasher = Crc32Hasher::new();
+    let mut buffer = [0_u8; 1024 * 64];
+
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|e| format!("Unable to hash {}: {e}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+
+    Ok(format!("{:08x}", hasher.finalize()))
 }
 
 fn compress_log_files_into_archive(request: &ArchiveRequest) -> Result<String, String> {
@@ -3616,7 +3801,11 @@ mod tests {
         let dir = test_temp_dir("scram-volume-match");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("051128_1105_20260618-2036.scram"), b"scrambled data").unwrap();
+        fs::write(
+            dir.join("051128_1105_20260618-2036.scram"),
+            b"scrambled data",
+        )
+        .unwrap();
         fs::write(dir.join("051128_1105_20260618-2036.log"), "C2: 903 samples").unwrap();
 
         let candidate = image_candidate_for_directory(
@@ -3639,7 +3828,11 @@ mod tests {
         let dir = test_temp_dir("scram-volume-mismatch");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("other_disc_20260618-2036.scram"), b"scrambled data").unwrap();
+        fs::write(
+            dir.join("other_disc_20260618-2036.scram"),
+            b"scrambled data",
+        )
+        .unwrap();
         fs::write(dir.join("other_disc_20260618-2036.log"), "SCSI: 4 samples").unwrap();
 
         let candidate = image_candidate_for_directory(
@@ -3682,7 +3875,10 @@ mod tests {
         .unwrap()
         .unwrap();
 
-        assert_eq!(candidate.image_name, "not_applicable_no_file_system_20260618-1455");
+        assert_eq!(
+            candidate.image_name,
+            "not_applicable_no_file_system_20260618-1455"
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -3907,6 +4103,40 @@ media errors:
     }
 
     #[test]
+    fn hashes_crc32_with_eight_hex_digits() {
+        let dir = test_temp_dir("crc32-hash");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("dump.iso");
+        fs::write(&file, b"123456789").unwrap();
+
+        assert_eq!(crc32_file(&file).unwrap(), "cbf43926");
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn parses_redump_info_zero_disc_count() {
+        let html = r#"<p class="disc-count-line"><small>0 discs found.</small></p>"#;
+
+        assert_eq!(parse_redump_info_disc_count(html), Some(0));
+    }
+
+    #[test]
+    fn parses_redump_info_positive_disc_count() {
+        let html = r#"<p class="disc-count-line"><small>2 discs found.</small></p>"#;
+
+        assert_eq!(parse_redump_info_disc_count(html), Some(2));
+    }
+
+    #[test]
+    fn falls_back_to_disc_links_for_redump_info_count() {
+        let html = r#"<tr class="clickable-row" data-href="/disc/40767">"#;
+
+        assert_eq!(parse_redump_info_disc_count(html), Some(1));
+    }
+
+    #[test]
     fn rejects_mismatched_dump_hashes() {
         let dir = test_temp_dir("mismatched-hashes");
         let _ = fs::remove_dir_all(&dir);
@@ -4022,6 +4252,6 @@ media errors:
 
         assert!(validate_request(&req)
             .unwrap_err()
-            .contains("Dump Twice, Compare Hashes"));
+            .contains("Dump Twice if No Match"));
     }
 }

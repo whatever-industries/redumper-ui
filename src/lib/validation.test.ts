@@ -96,6 +96,7 @@ describe("run request validation", () => {
 
     expect(commandPreview(request)).toContain("--image-name=movie");
     expect(commandPreview(request)).toContain("--image-name=movie_verify");
+    expect(commandPreview(request)).toContain("check redump.info CRC32");
     expect(commandPreview(request)).toContain("compare SHA-256");
   });
 

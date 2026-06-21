@@ -72,13 +72,13 @@ export function validateRunRequest(request: RunRequest): string[] {
     errors.push("Firmware flashing requires confirmation.");
   }
   if (request.dumpTwiceCompareHashes && !["disc", "dump"].includes(request.command)) {
-    errors.push("Dump Twice, Compare Hashes is only available for Disc and Dump.");
+    errors.push("Dump Twice if No Match is only available for Disc and Dump.");
   }
   if (request.dumpTwiceCompareHashes && request.manualCommand?.trim()) {
-    errors.push("Manual command editing is not available with Dump Twice, Compare Hashes.");
+    errors.push("Manual command editing is not available with Dump Twice if No Match.");
   }
   if (request.dumpTwiceCompareHashes && !request.imageName?.trim()) {
-    errors.push("Dump Twice, Compare Hashes requires an image name.");
+    errors.push("Dump Twice if No Match requires an image name.");
   }
   errors.push(...manual.errors);
 
@@ -115,7 +115,7 @@ export function commandPreview(request: RunRequest): string {
 
   const verifyArgs = commandArgs(request, `${request.imageName}_verify`);
   const verifyPreview = ["redumper", ...verifyArgs].map(quoteArg).join(" ");
-  return `${preview} && ${verifyPreview} && compare SHA-256`;
+  return `${preview} && check redump.info CRC32; if no match: ${verifyPreview} && compare SHA-256`;
 }
 
 function parseManualCommand(command?: string): { command?: string; errors: string[] } {

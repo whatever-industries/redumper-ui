@@ -199,6 +199,7 @@ export default function App() {
   const genericUserModeActive = commandMode === "generic";
   const commandId = genericUserModeActive ? "dump" : "disc";
   const command = getCommand(commandId);
+  const ringsEnabled = Boolean(optionState["--rings"]?.enabled);
   const suggestedImageName = useMemo(
     () => suggestImageName(selectedDrive?.volumeName || selectedDrive?.label || drive, imageNameSeed),
     [drive, imageNameSeed, selectedDrive?.label, selectedDrive?.volumeName]
@@ -648,6 +649,29 @@ export default function App() {
           return next;
         }
 
+        if (options.replaceProgress === true) {
+          let replaceIndex = -1;
+          for (let index = current.length - 1; index >= 0; index -= 1) {
+            if (shouldReplaceProgressLog(current[index], true)) {
+              replaceIndex = index;
+              break;
+            }
+          }
+          if (replaceIndex >= 0) {
+            const previous = current[replaceIndex];
+            if (previous.level === level && previous.text === text) {
+              return current;
+            }
+
+            const next = [...current];
+            next[replaceIndex] = {
+              ...nextLine,
+              id: previous.id
+            };
+            return next;
+          }
+        }
+
         return [...current.slice(-399), nextLine];
       }
 
@@ -719,6 +743,10 @@ export default function App() {
           progressRef.current = completeProgress;
           setProgress(completeProgress);
           setVisualProgressPercent(100);
+          const finalProgressLine = completeProgressLogLine(completeProgress);
+          if (finalProgressLine) {
+            pushLog("stdout", finalProgressLine, { replaceProgress: true });
+          }
         } else {
           const finalProgressPercent = progressPercentage(finalProgress);
           setVisualProgressPercent((current) => Math.max(current, finalProgressPercent));
@@ -1325,6 +1353,24 @@ export default function App() {
                     />
                     <span>Redump Compatible</span>
                   </label>
+                  <label className="command-mode-toggle" title="Add rings detection to the dump command">
+                    <span>+Rings</span>
+                    <input
+                      type="checkbox"
+                      checked={ringsEnabled}
+                      onChange={(event) =>
+                        setOptionState((current) => ({
+                          ...current,
+                          "--rings": {
+                            enabled: event.target.checked,
+                            value: current["--rings"]?.value ?? ""
+                          }
+                        }))
+                      }
+                      aria-label="Add rings detection"
+                      className="accent-checkbox command-checkbox shrink-0"
+                    />
+                  </label>
                 </div>
                 {commandMode === "redump" ? (
                   <div className="command-row">
@@ -1902,9 +1948,9 @@ function DumpTwiceCompareOptionRow({
           onChange={(event) => onChange(event.target.checked)}
           className="accent-checkbox h-3.5 w-3.5 shrink-0"
         />
-        <span className="option-label">Dump Twice, Compare Hashes</span>
+        <span className="option-label">Dump Twice if No Match</span>
       </label>
-      <code className="option-flag">second dump verify</code>
+      <code className="option-flag">redump.info CRC verify</code>
     </div>
   );
 }
@@ -2206,12 +2252,29 @@ function completeFinalProgress(progress: RunEvent["progress"] | null | undefined
   };
 }
 
+function completeProgressLogLine(progress: RunEvent["progress"] | null | undefined) {
+  if (!progress?.lbaTotal) {
+    return "";
+  }
+
+  const errors = [
+    ["SCSI", progress.scsiErrors],
+    ["EDC", progress.edcErrors],
+    ["C2s", progress.c2Errors],
+    ["Q", progress.qErrors]
+  ]
+    .filter(([, value]) => typeof value === "number")
+    .map(([label, value]) => `${label}: ${value}`)
+    .join(", ");
+  return `[100%] LBA: ${progress.lbaTotal}/${progress.lbaTotal}${errors ? `, errors: { ${errors} }` : ""}`;
+}
+
 function shouldReplaceProgressLog(line: LogLine | undefined, mode: ReplaceProgressMode | undefined) {
   if (!mode || line?.kind !== "progress") {
     return false;
   }
 
-  return mode === true || isTransientProgressLog(line.text);
+  return mode === true || line.text.toLowerCase().includes("lba:") || isTransientProgressLog(line.text);
 }
 
 function isTransientProgressLog(text: string) {
