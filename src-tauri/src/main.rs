@@ -1310,8 +1310,9 @@ fn redumper_executable_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn default_output_root(app: &AppHandle) -> PathBuf {
     app.path()
-        .download_dir()
-        .or_else(|_| app.path().home_dir().map(|home| home.join("Downloads")))
+        .home_dir()
+        .map(|home| home.join("Downloads"))
+        .or_else(|_| app.path().download_dir())
         .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
