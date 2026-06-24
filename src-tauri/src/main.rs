@@ -2483,10 +2483,13 @@ fn should_exclude_from_log_archive(file_name: &str) -> bool {
     let path = Path::new(&lower);
     let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
 
+    if extension == "bin" {
+        return !is_nonstandard_track_bin(&lower);
+    }
+
     matches!(
         extension,
         "7z" | "zip"
-            | "bin"
             | "cue"
             | "iso"
             | "img"
@@ -2502,6 +2505,33 @@ fn should_exclude_from_log_archive(file_name: &str) -> bool {
             | "sdram"
             | "sbram"
     )
+}
+
+fn is_nonstandard_track_bin(file_name: &str) -> bool {
+    let Some(track) = bin_track_designator(file_name) else {
+        return false;
+    };
+
+    !track
+        .parse::<u8>()
+        .map(|number| (1..=99).contains(&number))
+        .unwrap_or(false)
+}
+
+fn bin_track_designator(file_name: &str) -> Option<&str> {
+    let stem = file_name.strip_suffix(".bin")?;
+    let marker = "track ";
+    let marker_index = stem.rfind(marker)?;
+    let track = stem[marker_index + marker.len()..]
+        .trim()
+        .trim_end_matches(')')
+        .trim();
+
+    if track.is_empty() {
+        None
+    } else {
+        Some(track)
+    }
 }
 
 fn is_log_file(file_name: &str) -> bool {
@@ -4233,6 +4263,22 @@ media errors:
         assert!(dir.join("movie.iso").is_file());
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn archive_filter_keeps_standard_track_bins_outside_archive() {
+        assert!(should_exclude_from_log_archive("movie (Track 01).bin"));
+        assert!(should_exclude_from_log_archive("movie (Track 1).bin"));
+        assert!(should_exclude_from_log_archive("movie (Track 99).bin"));
+        assert!(should_exclude_from_log_archive("movie.bin"));
+    }
+
+    #[test]
+    fn archive_filter_includes_nonstandard_track_bins() {
+        assert!(!should_exclude_from_log_archive("movie (Track 0).bin"));
+        assert!(!should_exclude_from_log_archive("movie (Track 00).bin"));
+        assert!(!should_exclude_from_log_archive("movie (Track 100).bin"));
+        assert!(!should_exclude_from_log_archive("movie (Track A).bin"));
     }
 
     #[test]
