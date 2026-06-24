@@ -176,6 +176,7 @@ export default function App() {
   const [progress, setProgress] = useState<RunEvent["progress"] | null>(null);
   const [visualProgressPercent, setVisualProgressPercent] = useState(0);
   const [runFailed, setRunFailed] = useState(false);
+  const [runSucceeded, setRunSucceeded] = useState(false);
   const [activeDriveLabel, setActiveDriveLabel] = useState("");
   const [duplicateIsoMatch, setDuplicateIsoMatch] = useState<DuplicateIsoMatch | null>(null);
   const [deletingDuplicateIso, setDeletingDuplicateIso] = useState(false);
@@ -242,7 +243,7 @@ export default function App() {
   const validationErrors = useMemo(() => validateRunRequest(runRequest), [runRequest]);
   const progressPercent = Math.min(Math.max(progress?.percentage ?? 0, 0), 100);
   const hasRemainingErrors = progressHasErrors(progress);
-  const raceComplete = !runFailed && !hasRemainingErrors && !cancelRequested && visualProgressPercent >= 99.5;
+  const raceComplete = runSucceeded && !runFailed && !hasRemainingErrors && !cancelRequested;
   const raceFill = visualProgressPercent <= 0 ? "0%" : raceComplete ? "100%" : "var(--race-position)";
   const racePositionStyle = {
     "--race-position": `clamp(16px, ${visualProgressPercent}%, calc(100% - 34px))`,
@@ -335,6 +336,7 @@ export default function App() {
     setProgress(null);
     setVisualProgressPercent(0);
     setRunFailed(false);
+    setRunSucceeded(false);
     setCancelRequested(false);
     cancelRequestedRef.current = false;
     setStage("Idle");
@@ -569,6 +571,7 @@ export default function App() {
 
   useEffect(() => {
     setProgress(null);
+    setRunSucceeded(false);
     setStage("Idle");
   }, [commandId]);
 
@@ -698,6 +701,7 @@ export default function App() {
       setRunning(true);
       setCancelRequested(false);
       setRunFailed(false);
+      setRunSucceeded(false);
       setStage("STARTED");
       setProgress(null);
       setVisualProgressPercent(0);
@@ -733,11 +737,13 @@ export default function App() {
       cancelRequestedRef.current = false;
       setActiveDriveLabel("");
       setRunFailed(!wasCancelled && (finishedWithErrors || (typeof event.exitCode === "number" && event.exitCode !== 0)));
+      setRunSucceeded(!wasCancelled && exitedCleanly && !finishedWithErrors);
       setStage(wasCancelled ? "Idle" : finishedWithErrors ? "Errors Remain" : "END");
       if (wasCancelled) {
         progressRef.current = null;
         setProgress(null);
         setVisualProgressPercent(0);
+        setRunSucceeded(false);
       } else {
         if (exitedCleanly) {
           const completeProgress = completeFinalProgress(finalProgress);
@@ -860,6 +866,7 @@ export default function App() {
     setProgress(null);
     setVisualProgressPercent(0);
     setRunFailed(false);
+    setRunSucceeded(false);
     setExistingImageCandidate(null);
     setActiveDriveLabel(selectedDrive?.label ?? launchRequest.drive ?? "Auto-selected drive");
     setCancelRequested(false);
@@ -1008,6 +1015,7 @@ export default function App() {
       setCancelRequested(true);
       setProgress(null);
       setVisualProgressPercent(0);
+      setRunSucceeded(false);
       await invoke("cancel_redumper");
       pushLog("warning", "Cancel requested.");
     } catch (error) {
