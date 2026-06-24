@@ -2766,7 +2766,8 @@ fn parse_line(line: &str) -> ParsedLine {
     let lower = trimmed.to_ascii_lowercase();
     parsed.warning = lower.starts_with("warning:") || lower.contains(" warning:");
     parsed.error = lower.starts_with("error:");
-    parsed.transient_progress = is_replaceable_redumper_status(trimmed, &lower);
+    parsed.transient_progress =
+        is_replaceable_redumper_status(trimmed, &lower) || is_lba_spinner_status(trimmed);
 
     if trimmed.contains("LBA:") && trimmed.contains('%') {
         parsed.progress = Some(ProgressEvent {
@@ -2812,6 +2813,28 @@ fn is_replaceable_redumper_status(trimmed: &str, lower: &str) -> bool {
         || lower.contains("read");
 
     (is_hash_status || is_skeleton_status) && looks_incremental
+}
+
+fn is_lba_spinner_status(trimmed: &str) -> bool {
+    let Some(rest) = trimmed
+        .strip_prefix('|')
+        .or_else(|| trimmed.strip_prefix('/'))
+        .or_else(|| trimmed.strip_prefix('-'))
+        .or_else(|| trimmed.strip_prefix('\\'))
+    else {
+        return false;
+    };
+
+    let rest = rest.trim_start();
+    let Some(inner) = rest.strip_prefix("[LBA:") else {
+        return false;
+    };
+
+    let Some(value) = inner.trim_start().strip_suffix(']') else {
+        return false;
+    };
+
+    value.trim().parse::<i64>().is_ok()
 }
 
 fn parse_percentage(line: &str) -> Option<u32> {
@@ -3723,6 +3746,27 @@ mod tests {
     fn marks_skeleton_status_as_replaceable_progress_log() {
         let parsed = parse_line("creating skeleton... 9%");
         assert!(parsed.transient_progress);
+        assert!(parsed.progress.is_none());
+    }
+
+    #[test]
+    fn marks_spinner_lba_status_as_replaceable_progress_log() {
+        for line in [
+            "| [LBA: -17885]",
+            "/ [LBA: -17854]",
+            "- [LBA: -17823]",
+            "\\ [LBA: -17792]",
+        ] {
+            let parsed = parse_line(line);
+            assert!(parsed.transient_progress, "{line}");
+            assert!(parsed.progress.is_none(), "{line}");
+        }
+    }
+
+    #[test]
+    fn keeps_toc_lba_ranges_as_regular_output() {
+        let parsed = parse_line("index 01 { LBA: [  -150 ..     -1], length:    150 }");
+        assert!(!parsed.transient_progress);
         assert!(parsed.progress.is_none());
     }
 

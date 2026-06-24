@@ -306,6 +306,8 @@ export default function App() {
   async function refreshDrives(silent = false) {
     if (!silent) {
       resetRunVisuals();
+      setImageName("");
+      setExistingImageCandidate(null);
     }
 
     if (!isTauri) {
@@ -635,17 +637,18 @@ export default function App() {
   }, []);
 
   function pushLog(level: LogLine["level"], text: string, options: { replaceProgress?: ReplaceProgressMode } = {}) {
+    const logText = sanitizeLogText(text);
     setLogs((current) => {
       if (options.replaceProgress) {
         const nextLine = {
           id: `${Date.now()}-${Math.random()}`,
           level,
           kind: "progress" as const,
-          text
+          text: logText
         };
         const last = current.at(-1);
         if (last && shouldReplaceProgressLog(last, options.replaceProgress)) {
-          if (last.level === level && last.text === text) {
+          if (last.level === level && last.text === logText) {
             return current;
           }
 
@@ -667,7 +670,7 @@ export default function App() {
           }
           if (replaceIndex >= 0) {
             const previous = current[replaceIndex];
-            if (previous.level === level && previous.text === text) {
+            if (previous.level === level && previous.text === logText) {
               return current;
             }
 
@@ -684,7 +687,7 @@ export default function App() {
       }
 
       const last = current.at(-1);
-      if (last?.level === level && last.text === text) {
+      if (last?.level === level && last.text === logText) {
         return current;
       }
 
@@ -693,7 +696,7 @@ export default function App() {
         {
           id: `${Date.now()}-${Math.random()}`,
           level,
-          text
+          text: logText
         }
       ];
     });
@@ -1632,6 +1635,26 @@ function joinPath(parent: string, child: string) {
     return trimmedParent;
   }
   return `${trimmedParent}/${trimmedChild}`;
+}
+
+function sanitizeLogText(text: string) {
+  return text
+    .replace(/--image-path=(?:"([^"]+)"|'([^']+)'|(\S+))/g, (_match, doubleQuoted?: string, singleQuoted?: string, bare?: string) => {
+      const path = doubleQuoted ?? singleQuoted ?? bare ?? "";
+      const quote = doubleQuoted ? `"` : singleQuoted ? `'` : "";
+      return `--image-path=${quote}${pathDisplayName(path)}${quote}`;
+    })
+    .replace(/(image path:\s*)(.+)$/i, (_match, label: string, path: string) => `${label}${pathDisplayName(path)}`)
+    .replace(/(Saved log to\s+)(.+)$/i, (_match, label: string, path: string) => `${label}${pathDisplayName(path)}`)
+    .replace(/[A-Za-z]:\\(?:[^\s"']| [^-\s"'])+/g, (path) => pathDisplayName(path))
+    .replace(/\/(?:Users|Volumes|home|tmp|var|private|mnt|media|run)\/(?:[^\s"']| [^-\s"'])+/g, (path) => pathDisplayName(path));
+}
+
+function pathDisplayName(path: string) {
+  const trimmed = path.trim().replace(/^["']|["']$/g, "").replace(/[\\/]+$/, "");
+  const normalized = trimmed.replace(/\\/g, "/");
+  const parts = normalized.split("/").filter(Boolean);
+  return parts.at(-1) ?? trimmed;
 }
 
 function useSyncedState<T>(key: string, fallback: T | (() => T)) {
