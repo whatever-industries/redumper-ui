@@ -55,7 +55,7 @@ const SETTINGS_STORAGE_KEYS = {
   commandMode: "redumper-ui-command-mode",
   archiveFormat: "redumper-ui-archive-format",
   archiveToolPath: "redumper-ui-archive-tool-path",
-  dumpTwiceCompareHashes: "redumper-ui-dump-twice-compare-hashes",
+  dumpTwiceDvdCompareHashes: "redumper-ui-dump-twice-compare-hashes",
   firmwareCommandId: "redumper-ui-firmware-command-id",
   firmwarePath: "redumper-ui-firmware-path",
   firmwareForceFlash: "redumper-ui-firmware-force-flash",
@@ -158,7 +158,7 @@ export default function App() {
   const [manualCommandDirty, setManualCommandDirty] = useState(false);
   const [archiveFormat, setArchiveFormat] = useSyncedState<ArchiveFormat>(SETTINGS_STORAGE_KEYS.archiveFormat, "sevenZip");
   const [archiveToolPath, setArchiveToolPath] = useSyncedState(SETTINGS_STORAGE_KEYS.archiveToolPath, "");
-  const [dumpTwiceCompareHashes, setDumpTwiceCompareHashes] = useSyncedState(SETTINGS_STORAGE_KEYS.dumpTwiceCompareHashes, false);
+  const [dumpTwiceDvdCompareHashes, setDumpTwiceDvdCompareHashes] = useSyncedState(SETTINGS_STORAGE_KEYS.dumpTwiceDvdCompareHashes, false);
   const [firmwareCommandId, setFirmwareCommandId] = useSyncedState<FirmwareCommandId>(SETTINGS_STORAGE_KEYS.firmwareCommandId, "flash::mt1339");
   const [firmwarePath, setFirmwarePath] = useSyncedState(SETTINGS_STORAGE_KEYS.firmwarePath, "");
   const [firmwareForceFlash, setFirmwareForceFlash] = useSyncedState(SETTINGS_STORAGE_KEYS.firmwareForceFlash, false);
@@ -193,6 +193,8 @@ export default function App() {
   const activeTheme = themeMode === "system" ? (systemPrefersDark ? "dark" : "light") : themeMode;
 
   const selectedDrive = useMemo(() => drives.find((candidate) => candidate.path === drive), [drive, drives]);
+  const selectedMediaKind = selectedDrive?.mediaKind ?? mediaKindFromDriveLabel(selectedDrive?.label);
+  const dumpTwiceCompareHashes = dumpTwiceDvdCompareHashes && (selectedMediaKind === "dvd" || selectedMediaKind === "bd");
   const driveFallback = running ? activeDriveLabel || "Auto-selected drive" : driveFallbackLabel(appInfo.platform);
   const driveFieldLoading = !running && !drivesReady;
   const outputFieldLoading = !running && (appInfoLoading || !drivesReady);
@@ -569,7 +571,7 @@ export default function App() {
     optionState,
     archiveFormat,
     archiveToolPath,
-    dumpTwiceCompareHashes,
+    dumpTwiceDvdCompareHashes,
     firmwareCommandId,
     firmwarePath,
     firmwareForceFlash,
@@ -1143,8 +1145,8 @@ export default function App() {
             </>
           ) : null}
           {group === "Drive Test" ? <DriveTestActionRow running={running} onRun={() => void runDriveTest()} /> : null}
-          {group === "CD Dump" || group === "DVD/BD" ? (
-            <DumpTwiceCompareOptionRow checked={dumpTwiceCompareHashes} disabled={false} onChange={setDumpTwiceCompareHashes} />
+          {group === "DVD/BD" ? (
+            <DumpTwiceCompareOptionRow checked={dumpTwiceDvdCompareHashes} disabled={false} onChange={setDumpTwiceDvdCompareHashes} />
           ) : null}
           {groupOptions.map((option) => (
             <OptionRow
@@ -2436,6 +2438,23 @@ function volumeNameFromDriveLabel(label: string | null | undefined) {
   }
   const parenthesized = label.trim().match(/\(([^()]+)\)\s*$/);
   return meaningfulVolumeName(parenthesized?.[1]);
+}
+
+function mediaKindFromDriveLabel(label: string | null | undefined): DriveCandidate["mediaKind"] {
+  const normalized = label?.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ") ?? "";
+  if (!normalized) {
+    return "unknown";
+  }
+  if (/\b(blu ray|bd|bd rom)\b/.test(normalized)) {
+    return "bd";
+  }
+  if (/\b(dvd|dvd rom)\b/.test(normalized)) {
+    return "dvd";
+  }
+  if (/\b(audio cd|cd|cd rom|compact disc)\b/.test(normalized)) {
+    return "cd";
+  }
+  return "unknown";
 }
 
 function outputNameBaseFromDriveLabel(label: string) {

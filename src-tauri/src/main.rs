@@ -148,8 +148,18 @@ struct DriveCandidate {
     match_label: String,
     source: String,
     volume_name: Option<String>,
+    media_kind: MediaKind,
     redump_compliant: bool,
     generic_mode_required: bool,
+}
+
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum MediaKind {
+    Cd,
+    Dvd,
+    Bd,
+    Unknown,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -3192,7 +3202,15 @@ fn linux_drive_candidates() -> Vec<DriveCandidate> {
                     for generic in generic_entries.flatten() {
                         let device = format!("/dev/{}", generic.file_name().to_string_lossy());
                         let label = linux_drive_label(&path, &device);
-                        push_drive_candidate(&mut drives, &mut seen, device, label, "sysfs", None);
+                        push_drive_candidate(
+                            &mut drives,
+                            &mut seen,
+                            device,
+                            label,
+                            "sysfs",
+                            None,
+                            MediaKind::Unknown,
+                        );
                     }
                 }
             }
@@ -3279,7 +3297,7 @@ fn scan_macos_optical_nodes() -> HashMap<String, String> {
 fn windows_drive_candidates() -> Vec<DriveCandidate> {
     let script = r#"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
-$drives = Get-CimInstance Win32_CDROMDrive | Select-Object Name, Drive, VolumeName, MediaLoaded;
+$drives = Get-CimInstance Win32_CDROMDrive | Select-Object Name, Drive, VolumeName, MediaLoaded, MediaType;
 if ($null -eq $drives) { "[]" } else { $drives | ConvertTo-Json -Compress }
 "#;
     let mut command = Command::new("powershell");
@@ -3302,6 +3320,7 @@ fn push_drive_candidate(
     label: String,
     source: &str,
     volume_name: Option<String>,
+    media_kind: MediaKind,
 ) {
     let path = path.trim().to_string();
     if path.is_empty() {
@@ -3315,6 +3334,7 @@ fn push_drive_candidate(
             path,
             source: source.to_string(),
             volume_name,
+            media_kind,
             redump_compliant: false,
             generic_mode_required: true,
         });
@@ -3364,6 +3384,11 @@ fn parse_windows_cdrom_candidates(text: &str) -> Vec<DriveCandidate> {
             .and_then(|value| value.as_str())
             .map(str::trim)
             .filter(|value| !value.is_empty());
+        let media_kind = drive
+            .get("MediaType")
+            .and_then(|value| value.as_str())
+            .map(infer_media_kind)
+            .unwrap_or(MediaKind::Unknown);
         let label = if let Some(volume_name) = volume_name {
             format!("{path} ({name}) - {volume_name}")
         } else if name.is_empty() {
@@ -3379,6 +3404,7 @@ fn parse_windows_cdrom_candidates(text: &str) -> Vec<DriveCandidate> {
             label,
             "Win32_CDROMDrive",
             volume_name.map(str::to_string),
+            media_kind,
         );
     }
 
@@ -3443,6 +3469,7 @@ fn parse_macos_system_profiler_candidates(
             macos_drive_label(name, &node),
             "system_profiler",
             None,
+            MediaKind::Unknown,
         );
     }
 
@@ -3461,6 +3488,7 @@ fn macos_fallback_candidates(fallback_nodes: &HashMap<String, String>) -> Vec<Dr
             match_label: macos_drive_label(name, node),
             source: "diskutil".to_string(),
             volume_name: None,
+            media_kind: MediaKind::Unknown,
             redump_compliant: false,
             generic_mode_required: true,
         })
@@ -3473,6 +3501,7 @@ fn macos_add_volume_names(candidates: &mut [DriveCandidate]) {
     for candidate in candidates {
         let node = normalize_macos_node(&candidate.path);
         let device_path = format!("/dev/{node}");
+        candidate.media_kind = macos_diskutil_info_media_kind(&device_path);
         candidate.volume_name = macos_diskutil_info_volume_name(&device_path)
             .or_else(|| child_volume_names.get(&node).cloned());
         if let Some(volume_name) = &candidate.volume_name {
@@ -3626,6 +3655,18 @@ fn macos_diskutil_info_volume_name(device_path: &str) -> Option<String> {
     parse_macos_diskutil_info_volume_name(&text)
 }
 
+#[cfg(target_os = "macos")]
+fn macos_diskutil_info_media_kind(device_path: &str) -> MediaKind {
+    let output = Command::new("diskutil")
+        .args(["info", device_path])
+        .output();
+    let Ok(output) = output else {
+        return MediaKind::Unknown;
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    parse_macos_diskutil_info_media_kind(&text)
+}
+
 fn parse_macos_diskutil_info_optical_name(text: &str) -> Option<String> {
     let mut is_optical = false;
     let mut media_name: Option<String> = None;
@@ -3658,6 +3699,33 @@ fn parse_macos_diskutil_info_volume_name(text: &str) -> Option<String> {
             .strip_prefix("Volume Name:")
             .and_then(non_empty_macos_diskutil_value)
     })
+}
+
+fn parse_macos_diskutil_info_media_kind(text: &str) -> MediaKind {
+    text.lines()
+        .find_map(|line| {
+            let trimmed = line.trim();
+            trimmed
+                .strip_prefix("Optical Media Type:")
+                .map(infer_media_kind)
+        })
+        .unwrap_or(MediaKind::Unknown)
+}
+
+fn infer_media_kind(value: &str) -> MediaKind {
+    let normalized = value.trim().to_ascii_lowercase().replace(['_', '-'], " ");
+    if normalized.contains("blu ray") || normalized.split_whitespace().any(|part| part == "bd") {
+        MediaKind::Bd
+    } else if normalized.split_whitespace().any(|part| part == "dvd") {
+        MediaKind::Dvd
+    } else if normalized.contains("compact disc")
+        || normalized.contains("audio cd")
+        || normalized.split_whitespace().any(|part| part == "cd")
+    {
+        MediaKind::Cd
+    } else {
+        MediaKind::Unknown
+    }
 }
 
 fn non_empty_macos_diskutil_value(value: &str) -> Option<String> {
@@ -4008,12 +4076,13 @@ mod tests {
     #[test]
     fn parses_windows_cdrom_candidates() {
         let drives = parse_windows_cdrom_candidates(
-            r#"[{"Name":"HL-DT-ST DVDRAM","Drive":"E:","VolumeName":"GAME_DISC","MediaLoaded":true}]"#,
+            r#"[{"Name":"HL-DT-ST DVDRAM","Drive":"E:","VolumeName":"GAME_DISC","MediaLoaded":true,"MediaType":"DVD-ROM"}]"#,
         );
 
         assert_eq!(drives.len(), 1);
         assert_eq!(drives[0].path, "E:");
         assert_eq!(drives[0].label, "E: (HL-DT-ST DVDRAM) - GAME_DISC");
+        assert_eq!(drives[0].media_kind, MediaKind::Dvd);
     }
 
     #[test]
@@ -4111,6 +4180,29 @@ mod tests {
         );
 
         assert_eq!(name.as_deref(), Some("HL-DT-ST BD-RE BU40N"));
+        assert_eq!(
+            parse_macos_diskutil_info_media_kind(
+                r#"   Optical Drive Type:        CD-ROM, DVD-ROM, BD-ROM
+   Optical Media Type:        DVD-ROM
+"#
+            ),
+            MediaKind::Dvd
+        );
+        assert_eq!(
+            parse_macos_diskutil_info_media_kind(
+                r#"   Optical Drive Type:        CD-ROM, DVD-ROM, BD-ROM
+   Optical Media Type:        CD-ROM
+"#
+            ),
+            MediaKind::Cd
+        );
+        assert_eq!(
+            parse_macos_diskutil_info_media_kind(
+                r#"   Optical Drive Type:        CD-ROM, DVD-ROM, BD-ROM
+"#
+            ),
+            MediaKind::Unknown
+        );
         assert_eq!(
             parse_macos_diskutil_info_volume_name(
                 r#"   Volume Name:               ASING_01_SCN

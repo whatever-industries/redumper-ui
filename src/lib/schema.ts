@@ -93,6 +93,7 @@ export interface DriveCandidate {
   label: string;
   source: string;
   volumeName?: string | null;
+  mediaKind?: "cd" | "dvd" | "bd" | "unknown";
   redumpCompliant: boolean;
   genericModeRequired: boolean;
 }
