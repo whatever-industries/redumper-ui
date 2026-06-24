@@ -143,6 +143,8 @@ struct Diagnostic {
 struct DriveCandidate {
     path: String,
     label: String,
+    #[serde(skip_serializing)]
+    match_label: String,
     source: String,
     volume_name: Option<String>,
     redump_compliant: bool,
@@ -1582,7 +1584,7 @@ fn parse_recommended_drive_signature(line: &str) -> Option<DriveSignature> {
 
 fn mark_drive_compliance(candidates: &mut [DriveCandidate], recommended_drives: &[DriveSignature]) {
     for candidate in candidates {
-        let compliant = drive_matches_recommended_list(&candidate.label, recommended_drives);
+        let compliant = drive_matches_recommended_list(&candidate.match_label, recommended_drives);
         candidate.redump_compliant = compliant;
         candidate.generic_mode_required = !compliant;
     }
@@ -3058,6 +3060,7 @@ fn push_drive_candidate(
 
     if seen.insert(path.to_ascii_lowercase()) {
         drives.push(DriveCandidate {
+            match_label: label.clone(),
             label,
             path,
             source: source.to_string(),
@@ -3205,6 +3208,7 @@ fn macos_fallback_candidates(fallback_nodes: &HashMap<String, String>) -> Vec<Dr
         .map(|(name, node)| DriveCandidate {
             path: node.clone(),
             label: macos_drive_label(name, node),
+            match_label: macos_drive_label(name, node),
             source: "diskutil".to_string(),
             volume_name: None,
             redump_compliant: false,
@@ -3215,9 +3219,15 @@ fn macos_fallback_candidates(fallback_nodes: &HashMap<String, String>) -> Vec<Dr
 
 #[cfg(target_os = "macos")]
 fn macos_add_volume_names(candidates: &mut [DriveCandidate]) {
+    let child_volume_names = macos_child_volume_names();
     for candidate in candidates {
-        let device_path = format!("/dev/{}", normalize_macos_node(&candidate.path));
-        candidate.volume_name = macos_diskutil_info_volume_name(&device_path);
+        let node = normalize_macos_node(&candidate.path);
+        let device_path = format!("/dev/{node}");
+        candidate.volume_name = macos_diskutil_info_volume_name(&device_path)
+            .or_else(|| child_volume_names.get(&node).cloned());
+        if let Some(volume_name) = &candidate.volume_name {
+            candidate.label = macos_drive_label(volume_name, &node);
+        }
     }
 }
 
@@ -3270,6 +3280,80 @@ fn parse_macos_diskutil_nodes(text: &str) -> Vec<String> {
     text.lines()
         .filter_map(macos_diskutil_header_node)
         .collect::<Vec<_>>()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_child_volume_names() -> HashMap<String, String> {
+    let output = Command::new("diskutil").args(["list"]).output();
+    let Ok(output) = output else {
+        return HashMap::new();
+    };
+    parse_macos_child_volume_names(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_macos_child_volume_names(text: &str) -> HashMap<String, String> {
+    let mut volume_names = HashMap::new();
+    let mut current_node: Option<String> = None;
+    let mut body: Vec<String> = Vec::new();
+
+    for line in text.lines() {
+        if let Some(node) = macos_diskutil_header_node(line) {
+            collect_macos_child_volume_names(&mut volume_names, current_node.as_deref(), &body);
+            current_node = Some(node);
+            body.clear();
+        } else if current_node.is_some() {
+            body.push(line.to_string());
+        }
+    }
+    collect_macos_child_volume_names(&mut volume_names, current_node.as_deref(), &body);
+
+    volume_names
+}
+
+fn collect_macos_child_volume_names(
+    volume_names: &mut HashMap<String, String>,
+    node: Option<&str>,
+    body: &[String],
+) {
+    let Some(node) = node else {
+        return;
+    };
+
+    for line in body {
+        let Some(name) = macos_diskutil_child_volume_name(line, node) else {
+            continue;
+        };
+        volume_names.entry(node.to_string()).or_insert(name);
+    }
+}
+
+fn macos_diskutil_child_volume_name(line: &str, parent_node: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let parts = trimmed.split_whitespace().collect::<Vec<_>>();
+    if parts.len() < 6 || !parts[0].ends_with(':') {
+        return None;
+    }
+
+    let identifier = parts.last().copied()?;
+    if identifier == parent_node || !identifier.starts_with(parent_node) {
+        return None;
+    }
+
+    let name_end = parts.len().saturating_sub(3);
+    if name_end <= 2 {
+        return None;
+    }
+
+    let name = parts[2..name_end]
+        .join(" ")
+        .trim_start_matches('*')
+        .trim()
+        .to_string();
+    if name.is_empty() || macos_value_is_generic_optical_label(&name) {
+        None
+    } else {
+        Some(name)
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -3713,6 +3797,21 @@ mod tests {
             candidates,
             vec![("DREAMCAST GAME".to_string(), "disk4".to_string())]
         );
+    }
+
+    #[test]
+    fn parses_macos_child_volume_names_for_partitioned_disc() {
+        let names = parse_macos_child_volume_names(
+            r#"/dev/disk10 (external, physical):
+   #:                       TYPE NAME                    SIZE       IDENTIFIER
+   0:        CD_partition_scheme                        *415.6 MB   disk10
+   1:     Apple_partition_scheme                         361.8 MB   disk10s1
+   2:        Apple_partition_map                         32.8 KB    disk10s1s1
+   3:                  Apple_HFS TopGun_ST               361.8 MB   disk10s1s2
+"#,
+        );
+
+        assert_eq!(names.get("disk10").map(String::as_str), Some("TopGun_ST"));
     }
 
     #[test]
