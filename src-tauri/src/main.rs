@@ -72,6 +72,7 @@ fn default_output_subfolder() -> bool {
 struct ArchiveRequest {
     output_directory: PathBuf,
     image_name: Option<String>,
+    archive_stem: Option<String>,
     archive_tool_path: Option<String>,
     archive_format: ArchiveFormat,
 }
@@ -442,11 +443,15 @@ fn find_existing_image_candidate(
 #[tauri::command]
 fn delete_duplicate_iso(path: String) -> Result<String, String> {
     let candidate = PathBuf::from(path.trim());
+    delete_duplicate_iso_path(&candidate)
+}
+
+fn delete_duplicate_iso_path(candidate: &Path) -> Result<String, String> {
     if candidate.as_os_str().is_empty() {
-        return Err("Duplicate ISO path is empty.".to_string());
+        return Err("Duplicate image path is empty.".to_string());
     }
     if deletable_duplicate_iso_path(&candidate).is_none() {
-        return Err("Only duplicate _verify.iso files can be deleted.".to_string());
+        return Err("Only duplicate _verify image files can be deleted.".to_string());
     }
     let metadata = fs::symlink_metadata(&candidate).map_err(|e| {
         format!(
@@ -456,12 +461,12 @@ fn delete_duplicate_iso(path: String) -> Result<String, String> {
     })?;
     if !metadata.file_type().is_file() {
         return Err(format!(
-            "Duplicate ISO is not a regular file: {}",
+            "Duplicate image is not a regular file: {}",
             candidate.display()
         ));
     }
 
-    fs::remove_file(&candidate).map_err(|e| {
+    fs::remove_file(candidate).map_err(|e| {
         format!(
             "Unable to delete duplicate ISO {}: {e}",
             candidate.display()
@@ -472,7 +477,7 @@ fn delete_duplicate_iso(path: String) -> Result<String, String> {
         .and_then(|value| value.to_str())
         .map(str::to_string)
         .unwrap_or_else(|| candidate.to_string_lossy().to_string());
-    Ok(format!("Deleted duplicate ISO {deleted_name}."))
+    Ok(format!("Deleted duplicate image {deleted_name}."))
 }
 
 #[tauri::command]
@@ -658,6 +663,7 @@ fn run_redumper(
         Some(ArchiveRequest {
             output_directory: image_path.clone(),
             image_name: request.image_name.clone(),
+            archive_stem: None,
             archive_tool_path: request.archive_tool_path.clone(),
             archive_format: request.archive_format,
         })
@@ -948,27 +954,54 @@ fn run_dump_twice_compare_workflow(
 
         let mut exit_code = Some(0);
         match compare_dump_hashes(&image_path, &base_image_name, &verify_image_name) {
-            Ok(comparison) => emit_stage_with_duplicate_iso(
-                &app_for_wait,
-                &run_id_for_wait,
-                "VERIFY",
-                comparison.message,
-                comparison.duplicate_iso_path,
-            ),
+            Ok(comparison) => {
+                emit_stage(
+                    &app_for_wait,
+                    &run_id_for_wait,
+                    "VERIFY",
+                    comparison.message,
+                );
+
+                archive_successful_dump_with_stem(
+                    &app_for_wait,
+                    &run_id_for_wait,
+                    &first_request,
+                    &image_path,
+                    &base_image_name,
+                    Some(format!("{base_image_name}_dump1")),
+                );
+                archive_successful_dump_with_stem(
+                    &app_for_wait,
+                    &run_id_for_wait,
+                    &second_request,
+                    &image_path,
+                    &verify_image_name,
+                    Some(format!("{base_image_name}_dump2")),
+                );
+
+                for duplicate_image_path in comparison.duplicate_image_paths {
+                    match delete_duplicate_iso_path(&duplicate_image_path) {
+                        Ok(message) => {
+                            emit_stage(&app_for_wait, &run_id_for_wait, "VERIFY", message)
+                        }
+                        Err(message) => {
+                            emit_warning(
+                                &app_for_wait,
+                                &run_id_for_wait,
+                                "VERIFY",
+                                format!(
+                                    "Both dumps matched, but duplicate cleanup failed: {message}"
+                                ),
+                            );
+                            break;
+                        }
+                    }
+                }
+            }
             Err(message) => {
                 exit_code = Some(1);
                 emit_error(&app_for_wait, &run_id_for_wait, message);
             }
-        }
-
-        if exit_code == Some(0) {
-            archive_successful_dump(
-                &app_for_wait,
-                &run_id_for_wait,
-                &first_request,
-                &image_path,
-                &base_image_name,
-            );
         }
 
         emit_exit(&app_for_wait, &run_id_for_wait, exit_code, None);
@@ -1063,6 +1096,17 @@ fn archive_successful_dump(
     image_path: &Path,
     image_name: &str,
 ) {
+    archive_successful_dump_with_stem(app, run_id, request, image_path, image_name, None);
+}
+
+fn archive_successful_dump_with_stem(
+    app: &AppHandle,
+    run_id: &str,
+    request: &RunRequest,
+    image_path: &Path,
+    image_name: &str,
+    archive_stem: Option<String>,
+) {
     if !request.compress_log_files {
         return;
     }
@@ -1077,6 +1121,7 @@ fn archive_successful_dump(
     let archive_request = ArchiveRequest {
         output_directory: image_path.to_path_buf(),
         image_name: Some(image_name.to_string()),
+        archive_stem,
         archive_tool_path: request.archive_tool_path.clone(),
         archive_format: request.archive_format,
     };
@@ -2058,7 +2103,7 @@ fn file_name(path: &Path) -> Result<String, String> {
 #[derive(Debug, PartialEq, Eq)]
 struct DumpHashComparison {
     message: String,
-    duplicate_iso_path: Option<PathBuf>,
+    duplicate_image_paths: Vec<PathBuf>,
 }
 
 fn compare_dump_hashes(
@@ -2066,15 +2111,44 @@ fn compare_dump_hashes(
     first_image_name: &str,
     second_image_name: &str,
 ) -> Result<DumpHashComparison, String> {
-    let first_file = primary_dump_file(output_directory, first_image_name)?;
-    let second_file = primary_dump_file(output_directory, second_image_name)?;
-    let first_hash = sha256_file(&first_file)?;
-    let second_hash = sha256_file(&second_file)?;
+    let first_files = comparable_dump_image_files(output_directory, first_image_name)?;
+    let second_files = comparable_dump_image_files(output_directory, second_image_name)?;
 
-    if first_hash == second_hash {
-        return Ok(DumpHashComparison {
-            message: format!(
-                "Dump hashes match: {} and {} share SHA-256 {first_hash}.",
+    let first_keys: HashSet<&String> = first_files.keys().collect();
+    let second_keys: HashSet<&String> = second_files.keys().collect();
+    if first_keys != second_keys {
+        let missing_second = first_keys
+            .difference(&second_keys)
+            .map(|value| value.as_str())
+            .collect::<Vec<_>>();
+        let missing_first = second_keys
+            .difference(&first_keys)
+            .map(|value| value.as_str())
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "Dump file set mismatch: missing from second dump: {}; missing from first dump: {}.",
+            format_missing_file_keys(&missing_second),
+            format_missing_file_keys(&missing_first)
+        ));
+    }
+
+    let mut compared = 0usize;
+    let mut last_hash = None;
+    let mut keys = first_files.keys().cloned().collect::<Vec<_>>();
+    keys.sort();
+
+    for key in keys {
+        let first_file = first_files
+            .get(&key)
+            .ok_or_else(|| format!("Unable to compare hashes: missing first dump file {key}."))?;
+        let second_file = second_files
+            .get(&key)
+            .ok_or_else(|| format!("Unable to compare hashes: missing second dump file {key}."))?;
+        let first_hash = sha256_file(first_file)?;
+        let second_hash = sha256_file(second_file)?;
+        if first_hash != second_hash {
+            return Err(format!(
+                "Dump hash mismatch: {} = {first_hash}, {} = {second_hash}.",
                 first_file
                     .file_name()
                     .and_then(|name| name.to_str())
@@ -2083,30 +2157,154 @@ fn compare_dump_hashes(
                     .file_name()
                     .and_then(|name| name.to_str())
                     .unwrap_or(second_image_name)
-            ),
-            duplicate_iso_path: deletable_duplicate_iso_path(&second_file),
-        });
+            ));
+        }
+        compared += 1;
+        last_hash = Some(first_hash);
     }
 
-    Err(format!(
-        "Dump hash mismatch: {} = {first_hash}, {} = {second_hash}.",
-        first_file
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(first_image_name),
-        second_file
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(second_image_name)
-    ))
+    let duplicate_image_paths =
+        deletable_duplicate_image_paths(output_directory, second_image_name);
+    let message = if compared == 1 {
+        format!(
+            "Dump hashes match: {first_image_name} and {second_image_name} share SHA-256 {}.",
+            last_hash.unwrap_or_default()
+        )
+    } else {
+        format!("Dump hashes match across {compared} image file(s).")
+    };
+
+    Ok(DumpHashComparison {
+        message,
+        duplicate_image_paths,
+    })
+}
+
+fn format_missing_file_keys(keys: &[&str]) -> String {
+    if keys.is_empty() {
+        "none".to_string()
+    } else {
+        keys.join(", ")
+    }
+}
+
+fn comparable_dump_image_files(
+    output_directory: &Path,
+    image_name: &str,
+) -> Result<HashMap<String, PathBuf>, String> {
+    let image_name = image_name.trim();
+    let entries = fs::read_dir(output_directory).map_err(|e| {
+        format!(
+            "Unable to find dump file for {image_name}: could not read {}: {e}",
+            output_directory.display()
+        )
+    })?;
+
+    let mut files = HashMap::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() || !is_hash_comparable_image_file(&path) {
+            continue;
+        }
+
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if let Some(key) = image_file_comparison_key(file_name, image_name) {
+            files.insert(key, path);
+        }
+    }
+
+    if files.is_empty() {
+        return Err(format!(
+            "Unable to compare hashes: no dump image files were found for {image_name} in {}.",
+            output_directory.display()
+        ));
+    }
+
+    Ok(files)
+}
+
+fn image_file_comparison_key(file_name: &str, image_name: &str) -> Option<String> {
+    let path = Path::new(file_name);
+    if !path.is_file() && path.components().count() > 1 {
+        return None;
+    }
+    let extension = file_extension(path)?;
+    if !hash_comparable_image_extensions().contains(&extension.as_str()) {
+        return None;
+    }
+
+    let stem = path.file_stem().and_then(|value| value.to_str())?;
+    if stem == image_name {
+        return Some(format!(".{extension}"));
+    }
+    stem.strip_prefix(image_name)
+        .filter(|suffix| suffix.starts_with(" "))
+        .map(|suffix| format!("{suffix}.{extension}"))
 }
 
 fn deletable_duplicate_iso_path(path: &Path) -> Option<PathBuf> {
-    if file_extension(path).as_deref() != Some("iso") {
-        return None;
-    }
+    let parent = path.parent()?;
     let stem = path.file_stem().and_then(|value| value.to_str())?;
-    stem.ends_with("_verify").then(|| path.to_path_buf())
+    let image_name = duplicate_verify_image_name_from_stem(stem)?;
+    deletable_duplicate_image_paths(parent, &image_name)
+        .into_iter()
+        .find(|candidate| candidate == path)
+}
+
+fn duplicate_verify_image_name_from_stem(stem: &str) -> Option<String> {
+    if stem.ends_with("_verify") {
+        return Some(stem.to_string());
+    }
+    stem.find("_verify ")
+        .map(|index| stem[..index + "_verify".len()].to_string())
+}
+
+fn deletable_duplicate_image_paths(output_directory: &Path, image_name: &str) -> Vec<PathBuf> {
+    if !image_name.ends_with("_verify") {
+        return Vec::new();
+    }
+
+    let Ok(entries) = fs::read_dir(output_directory) else {
+        return Vec::new();
+    };
+
+    let mut paths = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .filter(|path| is_deletable_duplicate_image_file(path, image_name))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+}
+
+fn is_deletable_duplicate_image_file(path: &Path, image_name: &str) -> bool {
+    let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    let Some(extension) = file_extension(path) else {
+        return false;
+    };
+    if !deletable_duplicate_image_extensions().contains(&extension.as_str()) {
+        return false;
+    }
+
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    stem == image_name
+        || stem
+            .strip_prefix(image_name)
+            .map(|suffix| suffix.starts_with(" "))
+            .unwrap_or(false)
+        || image_file_comparison_key(file_name, image_name).is_some()
+}
+
+fn deletable_duplicate_image_extensions() -> &'static [&'static str] {
+    &["iso", "bin", "img", "raw", "cue", "mdf", "mds", "scram"]
 }
 
 fn primary_dump_file(output_directory: &Path, image_name: &str) -> Result<PathBuf, String> {
@@ -2150,9 +2348,19 @@ fn comparable_image_extensions() -> &'static [&'static str] {
     &["iso", "bin", "img", "raw", "scram", "sdram", "sbram"]
 }
 
+fn hash_comparable_image_extensions() -> &'static [&'static str] {
+    &["iso", "bin", "img", "raw", "sdram", "sbram"]
+}
+
 fn is_comparable_image_file(path: &Path) -> bool {
     file_extension(path)
         .map(|extension| comparable_image_extensions().contains(&extension.as_str()))
+        .unwrap_or(false)
+}
+
+fn is_hash_comparable_image_file(path: &Path) -> bool {
+    file_extension(path)
+        .map(|extension| hash_comparable_image_extensions().contains(&extension.as_str()))
         .unwrap_or(false)
 }
 
@@ -2272,10 +2480,15 @@ fn archive_candidates(request: &ArchiveRequest) -> Result<(String, Vec<String>),
     Ok((image_prefix, candidates))
 }
 
-fn archive_file_name(output_directory: &Path, image_prefix: &str, extension: &str) -> String {
-    let mut archive_name = format!("{image_prefix}_logs.{extension}");
-    if output_directory.join(&archive_name).exists() {
-        archive_name = format!("{image_prefix}_logs_{}.{}", archive_timestamp(), extension);
+fn archive_file_name(request: &ArchiveRequest, image_prefix: &str, extension: &str) -> String {
+    let archive_stem = request
+        .archive_stem
+        .as_deref()
+        .and_then(archive_prefix)
+        .unwrap_or_else(|| format!("{image_prefix}_logs"));
+    let mut archive_name = format!("{archive_stem}.{extension}");
+    if request.output_directory.join(&archive_name).exists() {
+        archive_name = format!("{archive_stem}_{}.{}", archive_timestamp(), extension);
     }
     archive_name
 }
@@ -2286,7 +2499,7 @@ fn compress_candidates_with_7z(
     candidates: &[String],
     seven_zip: &Path,
 ) -> Result<(String, usize, usize), String> {
-    let archive_name = archive_file_name(&request.output_directory, image_prefix, "7z");
+    let archive_name = archive_file_name(request, image_prefix, "7z");
     let mut command = Command::new(seven_zip);
     suppress_child_console(&mut command);
     let output = command
@@ -2325,7 +2538,7 @@ fn compress_candidates_with_zip(
     image_prefix: &str,
     candidates: &[String],
 ) -> Result<(String, usize, usize), String> {
-    let archive_name = archive_file_name(&request.output_directory, image_prefix, "zip");
+    let archive_name = archive_file_name(request, image_prefix, "zip");
     let archive_path = request.output_directory.join(&archive_name);
     let archive_file = fs::File::create(&archive_path).map_err(|e| {
         format!(
@@ -4316,9 +4529,57 @@ media errors:
 
         assert!(comparison.message.contains("Dump hashes match"));
         assert_eq!(
-            comparison.duplicate_iso_path,
-            Some(dir.join("movie_verify.iso"))
+            comparison.duplicate_image_paths,
+            vec![dir.join("movie_verify.iso")]
         );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn compares_matching_cd_track_bins_and_marks_verify_image_set_deletable() {
+        let dir = test_temp_dir("matching-cd-tracks");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("album (Track 01).bin"), b"track one").unwrap();
+        fs::write(dir.join("album (Track 02).bin"), b"track two").unwrap();
+        fs::write(
+            dir.join("album.cue"),
+            b"FILE \"album (Track 01).bin\" BINARY",
+        )
+        .unwrap();
+        fs::write(dir.join("album_verify (Track 01).bin"), b"track one").unwrap();
+        fs::write(dir.join("album_verify (Track 02).bin"), b"track two").unwrap();
+        fs::write(
+            dir.join("album_verify.cue"),
+            b"FILE \"album_verify (Track 01).bin\" BINARY",
+        )
+        .unwrap();
+        fs::write(dir.join("album_verify.scram"), b"duplicate refine data").unwrap();
+        fs::write(dir.join("album_verify.log"), b"keep this outside archives").unwrap();
+
+        let comparison = compare_dump_hashes(&dir, "album", "album_verify").unwrap();
+
+        assert!(comparison.message.contains("2 image file"));
+        assert_eq!(
+            comparison.duplicate_image_paths,
+            vec![
+                dir.join("album_verify (Track 01).bin"),
+                dir.join("album_verify (Track 02).bin"),
+                dir.join("album_verify.cue"),
+                dir.join("album_verify.scram"),
+            ]
+        );
+
+        for path in &comparison.duplicate_image_paths {
+            delete_duplicate_iso_path(path).unwrap();
+        }
+
+        assert!(dir.join("album_verify.log").exists());
+        assert!(!dir.join("album_verify (Track 01).bin").exists());
+        assert!(!dir.join("album_verify (Track 02).bin").exists());
+        assert!(!dir.join("album_verify.cue").exists());
+        assert!(!dir.join("album_verify.scram").exists());
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -4382,7 +4643,7 @@ media errors:
 
         let message = delete_duplicate_iso(duplicate.to_string_lossy().to_string()).unwrap();
 
-        assert!(message.contains("Deleted duplicate ISO"));
+        assert!(message.contains("Deleted duplicate image"));
         assert!(!duplicate.exists());
 
         fs::remove_dir_all(dir).unwrap();
@@ -4400,6 +4661,7 @@ media errors:
         let request = ArchiveRequest {
             output_directory: dir.clone(),
             image_name: Some("movie".to_string()),
+            archive_stem: None,
             archive_tool_path: None,
             archive_format: ArchiveFormat::Zip,
         };
@@ -4418,6 +4680,33 @@ media errors:
         assert!(dir.join("movie.log").is_file());
         assert!(!dir.join("movie.txt").exists());
         assert!(dir.join("movie.iso").is_file());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn archive_file_name_uses_custom_dump_stem() {
+        let dir = test_temp_dir("archive-custom-stem");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let request = ArchiveRequest {
+            output_directory: dir.clone(),
+            image_name: Some("movie_verify".to_string()),
+            archive_stem: Some("movie_dump2".to_string()),
+            archive_tool_path: None,
+            archive_format: ArchiveFormat::SevenZip,
+        };
+
+        assert_eq!(
+            archive_file_name(&request, "movie_verify", "7z"),
+            "movie_dump2.7z"
+        );
+
+        fs::write(dir.join("movie_dump2.7z"), b"existing archive").unwrap();
+        let collision_name = archive_file_name(&request, "movie_verify", "7z");
+        assert!(collision_name.starts_with("movie_dump2_"));
+        assert!(collision_name.ends_with(".7z"));
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -4456,7 +4745,7 @@ media errors:
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let original = dir.join("movie.iso");
-        let non_iso = dir.join("movie_verify.bin");
+        let non_iso = dir.join("movie_verify.txt");
         fs::write(&original, b"original").unwrap();
         fs::write(&non_iso, b"duplicate").unwrap();
 
