@@ -19,7 +19,7 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder
 use tauri_plugin_updater::UpdaterExt;
 
 #[cfg(all(not(test), target_os = "macos"))]
-use tauri::menu::{Menu, MenuItem, Submenu};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 
 const RUN_EVENT: &str = "redumper://event";
 const REDUMP_INFO_DISCS_URL: &str = "https://redump.info/discs";
@@ -271,7 +271,21 @@ fn main() {
                 MenuItem::with_id(app, "settings", "Settings", true, Some("CmdOrCtrl+,"))?;
             let close = MenuItem::with_id(app, "close", "Close", true, Some("CmdOrCtrl+W"))?;
             let file = Submenu::with_items(app, "File", true, &[&settings, &close])?;
-            Menu::with_items(app, &[&file])
+            let edit = Submenu::with_items(
+                app,
+                "Edit",
+                true,
+                &[
+                    &PredefinedMenuItem::undo(app, None)?,
+                    &PredefinedMenuItem::redo(app, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::cut(app, None)?,
+                    &PredefinedMenuItem::copy(app, None)?,
+                    &PredefinedMenuItem::paste(app, None)?,
+                    &PredefinedMenuItem::select_all(app, None)?,
+                ],
+            )?;
+            Menu::with_items(app, &[&file, &edit])
         })
         .on_menu_event(|app, event| {
             if event.id() == "settings" {
