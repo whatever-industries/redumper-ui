@@ -479,6 +479,14 @@ textarea {
   text-align: center;
 }
 
+.metric-detail {
+  color: var(--app-muted);
+  font-size: 7px;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+}
+
 .lba-value {
   display: grid;
   justify-items: center;

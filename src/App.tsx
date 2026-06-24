@@ -177,6 +177,7 @@ export default function App() {
   const [visualProgressPercent, setVisualProgressPercent] = useState(0);
   const [runFailed, setRunFailed] = useState(false);
   const [runSucceeded, setRunSucceeded] = useState(false);
+  const [benignCdrEndSectorErrors, setBenignCdrEndSectorErrors] = useState(false);
   const [activeDriveLabel, setActiveDriveLabel] = useState("");
   const [duplicateIsoMatch, setDuplicateIsoMatch] = useState<DuplicateIsoMatch | null>(null);
   const [deletingDuplicateIso, setDeletingDuplicateIso] = useState(false);
@@ -190,6 +191,7 @@ export default function App() {
   const commandTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const progressRef = useRef<RunEvent["progress"] | null>(null);
   const cancelRequestedRef = useRef(false);
+  const benignCdrEndSectorErrorsRef = useRef(false);
   const activeTheme = themeMode === "system" ? (systemPrefersDark ? "dark" : "light") : themeMode;
 
   const selectedDrive = useMemo(() => drives.find((candidate) => candidate.path === drive), [drive, drives]);
@@ -244,7 +246,7 @@ export default function App() {
   );
   const validationErrors = useMemo(() => validateRunRequest(runRequest), [runRequest]);
   const progressPercent = Math.min(Math.max(progress?.percentage ?? 0, 0), 100);
-  const hasRemainingErrors = progressHasErrors(progress);
+  const hasRemainingErrors = progressHasBlockingErrors(progress, benignCdrEndSectorErrors);
   const raceComplete = runSucceeded && !runFailed && !hasRemainingErrors && !cancelRequested;
   const raceFill = visualProgressPercent <= 0 ? "0%" : raceComplete ? "100%" : "var(--race-position)";
   const racePositionStyle = {
@@ -341,6 +343,8 @@ export default function App() {
     setVisualProgressPercent(0);
     setRunFailed(false);
     setRunSucceeded(false);
+    setBenignCdrEndSectorErrors(false);
+    benignCdrEndSectorErrorsRef.current = false;
     setCancelRequested(false);
     cancelRequestedRef.current = false;
     setStage("Idle");
@@ -581,6 +585,8 @@ export default function App() {
   useEffect(() => {
     setProgress(null);
     setRunSucceeded(false);
+    setBenignCdrEndSectorErrors(false);
+    benignCdrEndSectorErrorsRef.current = false;
     setStage("Idle");
   }, [commandId]);
 
@@ -707,11 +713,13 @@ export default function App() {
   function handleRunEvent(event: RunEvent) {
     if (event.kind === "started") {
       cancelRequestedRef.current = false;
+      benignCdrEndSectorErrorsRef.current = false;
       progressRef.current = null;
       setRunning(true);
       setCancelRequested(false);
       setRunFailed(false);
       setRunSucceeded(false);
+      setBenignCdrEndSectorErrors(false);
       setStage("STARTED");
       setProgress(null);
       setVisualProgressPercent(0);
@@ -734,13 +742,17 @@ export default function App() {
       });
     }
     if (event.line) {
+      if (isBenignCdrEndSectorErrorLine(event.line)) {
+        benignCdrEndSectorErrorsRef.current = true;
+        setBenignCdrEndSectorErrors(true);
+      }
       const level = event.kind === "warning" || event.kind === "error" || event.kind === "stderr" ? event.kind : "stdout";
       pushLog(level as LogLine["level"], event.line, { replaceProgress: event.kind === "progress" ? true : event.stage === "END" ? "transient" : false });
     }
     if (event.kind === "exit") {
       const wasCancelled = cancelRequestedRef.current;
       const finalProgress = event.progress ?? progressRef.current;
-      const finishedWithErrors = progressHasErrors(finalProgress);
+      const finishedWithErrors = progressHasBlockingErrors(finalProgress, benignCdrEndSectorErrorsRef.current);
       const exitedCleanly = event.exitCode === 0;
       setRunning(false);
       setCancelRequested(false);
@@ -877,6 +889,8 @@ export default function App() {
     setVisualProgressPercent(0);
     setRunFailed(false);
     setRunSucceeded(false);
+    setBenignCdrEndSectorErrors(false);
+    benignCdrEndSectorErrorsRef.current = false;
     setExistingImageCandidate(null);
     setActiveDriveLabel(selectedDrive?.label ?? launchRequest.drive ?? "Auto-selected drive");
     setCancelRequested(false);
@@ -1446,7 +1460,8 @@ export default function App() {
                     <Metric
                       label="C2"
                       value={progress?.c2Errors ?? 0}
-                      alert={(progress?.c2Errors ?? 0) > 0}
+                      alert={(progress?.c2Errors ?? 0) > 0 && !benignCdrEndSectorErrors}
+                      detail={benignCdrEndSectorErrors && (progress?.c2Errors ?? 0) > 0 ? "CD-R END SECTOR ONLY" : undefined}
                     />
                     <Metric label="Q" value={progress?.qErrors ?? 0} />
                   </div>
@@ -2371,11 +2386,32 @@ function progressHasErrors(progress: RunEvent["progress"] | null | undefined) {
   return progressErrorSummary(progress).length > 0;
 }
 
-function Metric({ label, value, inactive = false, alert = false }: { label: string; value: React.ReactNode; inactive?: boolean; alert?: boolean }) {
+function progressHasBlockingErrors(progress: RunEvent["progress"] | null | undefined, benignCdrEndSectorErrors: boolean) {
+  return progressHasErrors(progress) && !benignCdrEndSectorErrors;
+}
+
+function isBenignCdrEndSectorErrorLine(line: string) {
+  return line.toLowerCase().includes("cd-r trailing c2 errors detected");
+}
+
+function Metric({
+  label,
+  value,
+  detail,
+  inactive = false,
+  alert = false
+}: {
+  label: string;
+  value: React.ReactNode;
+  detail?: React.ReactNode;
+  inactive?: boolean;
+  alert?: boolean;
+}) {
   return (
     <div className={clsx("metric min-w-0 rounded px-2 py-1", inactive && "is-inactive", alert && "has-alert")}>
       <div className="metric-label truncate uppercase">{label}</div>
       <div className="metric-value truncate">{value}</div>
+      {detail ? <div className="metric-detail">{detail}</div> : null}
     </div>
   );
 }
