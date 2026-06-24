@@ -529,6 +529,11 @@ export default function App() {
   }, [commandMode]);
 
   useEffect(() => {
+    setManualCommand("");
+    setManualCommandDirty(false);
+  }, [generatedPreview]);
+
+  useEffect(() => {
     if (!isTauri || !isSettingsWindow) {
       return;
     }
