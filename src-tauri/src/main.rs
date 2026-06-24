@@ -3303,11 +3303,36 @@ fn non_empty_macos_diskutil_value(value: &str) -> Option<String> {
         || lower == "(null)"
         || lower.starts_with("not applicable")
         || lower == "none"
+        || macos_value_is_generic_optical_label(value)
     {
         None
     } else {
         Some(value.to_string())
     }
+}
+
+fn macos_value_is_generic_optical_label(value: &str) -> bool {
+    let normalized = value
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['_', '-'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    matches!(
+        normalized.as_str(),
+        "audio cd"
+            | "cd"
+            | "cd rom"
+            | "dvd"
+            | "dvd rom"
+            | "bd"
+            | "bd rom"
+            | "blu ray"
+            | "blu ray disc"
+            | "optical disc"
+            | "optical media"
+    )
 }
 
 fn push_macos_diskutil_candidate(
@@ -3362,7 +3387,7 @@ fn macos_diskutil_line_name(line: &str) -> Option<String> {
         .trim_start_matches('*')
         .trim()
         .to_string();
-    if name.is_empty() {
+    if name.is_empty() || macos_value_is_generic_optical_label(&name) {
         None
     } else {
         Some(name)
@@ -3699,6 +3724,14 @@ mod tests {
             parse_macos_diskutil_info_volume_name(
                 r#"   Volume Name:               Not applicable (no file system)
    Optical Media Type:        DVD-ROM
+"#
+            ),
+            None
+        );
+        assert_eq!(
+            parse_macos_diskutil_info_volume_name(
+                r#"   Volume Name:               Audio CD
+   Optical Media Type:        CD-ROM
 "#
             ),
             None

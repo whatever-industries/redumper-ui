@@ -589,7 +589,7 @@ export default function App() {
       setExistingImageChecking(true);
       try {
         const driveContext = {
-          driveVolumeName: selectedDrive?.volumeName ?? volumeNameFromDriveLabel(selectedDrive?.label),
+          driveVolumeName: meaningfulVolumeName(selectedDrive?.volumeName) ?? volumeNameFromDriveLabel(selectedDrive?.label),
           driveLabel: selectedDrive?.label ?? undefined
         };
         const candidate =
@@ -709,8 +709,9 @@ export default function App() {
       setStage(event.stage);
     }
     if (event.progress) {
-      progressRef.current = event.progress;
-      setProgress(event.progress);
+      const displayProgress = normalizeProgressForDisplay(event.progress);
+      progressRef.current = displayProgress;
+      setProgress(displayProgress);
     }
     if (event.duplicateIsoPath) {
       setDuplicateIsoMatch({
@@ -2239,6 +2240,27 @@ function progressPercentage(progress: RunEvent["progress"] | null | undefined) {
   return Math.min(Math.max(progress?.percentage ?? 0, 0), 100);
 }
 
+function normalizeProgressForDisplay(progress: RunEvent["progress"]): RunEvent["progress"] {
+  if (!progress) {
+    return progress;
+  }
+  const current = progress.lbaCurrent;
+  const total = progress.lbaTotal;
+  if (typeof current !== "number" || typeof total !== "number" || total <= 0) {
+    return progress;
+  }
+
+  if (current >= total - 1) {
+    return {
+      ...progress,
+      percentage: 100,
+      lbaCurrent: total
+    };
+  }
+
+  return progress;
+}
+
 function completeFinalProgress(progress: RunEvent["progress"] | null | undefined): RunEvent["progress"] {
   if (!progress) {
     return { percentage: 100 };
@@ -2364,32 +2386,49 @@ function suggestImageName(label: string, stamp: string) {
   return `${normalized || "disc"}_${stamp}`;
 }
 
+function meaningfulVolumeName(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  if (!trimmed || looksLikeDriveModel(trimmed) || looksLikeGenericOpticalLabel(trimmed) || looksLikeDeviceIdentifier(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
 function volumeNameFromDriveLabel(label: string | null | undefined) {
   if (!label) {
     return undefined;
   }
   const parenthesized = label.trim().match(/\(([^()]+)\)\s*$/);
-  const value = parenthesized?.[1]?.trim();
-  if (!value || looksLikeDriveModel(value)) {
-    return undefined;
-  }
-  return value;
+  return meaningfulVolumeName(parenthesized?.[1]);
 }
 
 function outputNameBaseFromDriveLabel(label: string) {
   const trimmed = label.trim();
   const parenthesized = trimmed.match(/\(([^()]+)\)\s*$/);
   if (parenthesized?.[1]) {
-    const value = parenthesized[1].trim();
-    if (value && !looksLikeDriveModel(value)) {
+    const value = meaningfulVolumeName(parenthesized[1]);
+    if (value) {
       return value;
     }
+  }
+  if (looksLikeGenericOpticalLabel(trimmed) || looksLikeDeviceIdentifier(trimmed)) {
+    return "";
   }
   return trimmed;
 }
 
 function looksLikeDriveModel(value: string) {
   return /\b(BD|BD-RE|DVD|DVD-ROM|CD|CD-ROM|HL-DT-ST|MATSHITA|PIONEER|PLEXTOR|ASUS|TSST|OPTIARC)\b/i.test(value);
+}
+
+function looksLikeGenericOpticalLabel(value: string) {
+  const normalized = value.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+  return /^(audio cd|cd|cd rom|dvd|dvd rom|bd|bd rom|blu ray|blu ray disc|optical disc|optical media)$/.test(normalized);
+}
+
+function looksLikeDeviceIdentifier(value: string) {
+  const trimmed = value.trim();
+  return /^\/dev\/\S+$/i.test(trimmed) || /^disk\d+(s\d+)?$/i.test(trimmed) || /^[a-z]:\\?$/i.test(trimmed);
 }
 
 function formatDateStamp(date: Date) {
