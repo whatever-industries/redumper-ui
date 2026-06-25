@@ -150,7 +150,7 @@ export default function App() {
   const [driveSpeed, setDriveSpeed] = useState("");
   const [imagePath, setImagePath] = useState("");
   const [imageName, setImageName] = useState("");
-  const [imageNameSeed] = useState(() => formatDateStamp(new Date()));
+  const [imageNameSeed, setImageNameSeed] = useState(() => formatDateStamp(new Date()));
   const [existingImageCandidate, setExistingImageCandidate] = useState<ExistingImageCandidate | null>(null);
   const [existingImageChecking, setExistingImageChecking] = useState(false);
   const [commandMode, setCommandMode] = useSyncedState<CommandMode>(SETTINGS_STORAGE_KEYS.commandMode, "redump");
@@ -310,6 +310,7 @@ export default function App() {
   async function refreshDrives(silent = false) {
     if (!silent) {
       resetRunVisuals();
+      setImageNameSeed(formatDateStamp(new Date()));
       setImageName("");
       setExistingImageCandidate(null);
     }
