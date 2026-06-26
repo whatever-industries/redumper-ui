@@ -314,6 +314,7 @@ fn main() {
             get_app_info,
             list_drives,
             find_existing_image_candidate,
+            find_existing_image_candidate_for_output,
             check_output_conflict,
             run_redumper,
             cancel_redumper,
@@ -447,6 +448,23 @@ fn find_existing_image_candidate(
     image_candidate_for_directory(
         Path::new(&directory),
         ExistingImageMatchContext::from_drive(drive_volume_name, drive_label),
+    )
+}
+
+#[tauri::command]
+fn find_existing_image_candidate_for_output(
+    image_path: String,
+    image_name: String,
+    drive_volume_name: String,
+    drive_label: String,
+) -> Result<Option<ExistingImageCandidate>, String> {
+    image_candidate_for_output_selection(
+        Path::new(&image_path),
+        &image_name,
+        ExistingImageMatchContext::from_drive(
+            non_empty_trimmed_string(&drive_volume_name),
+            non_empty_trimmed_string(&drive_label),
+        ),
     )
 }
 
@@ -1965,10 +1983,50 @@ fn image_candidate_for_directory(
     }))
 }
 
+fn image_candidate_for_output_selection(
+    image_path: &Path,
+    image_name: &str,
+    match_context: Option<ExistingImageMatchContext>,
+) -> Result<Option<ExistingImageCandidate>, String> {
+    if let Some(candidate) = image_candidate_for_directory(image_path, None)? {
+        return Ok(Some(candidate));
+    }
+
+    let output_directory = image_path.join(image_name);
+    if let Some(candidate) = image_candidate_for_directory(&output_directory, None)? {
+        return Ok(Some(candidate));
+    }
+
+    if let Some(context) = match_context {
+        return image_candidate_for_directory(&output_directory, Some(context));
+    }
+
+    Ok(None)
+}
+
 fn log_file_has_refinable_read_errors(path: &Path) -> Result<bool, String> {
     let text = fs::read_to_string(path)
         .map_err(|e| format!("Unable to read log file {}: {e}", path.display()))?;
-    Ok(text.lines().any(line_has_refinable_read_errors))
+    Ok(text.lines().any(line_has_refinable_read_errors)
+        || !log_indicates_clean_completed_dump(&text))
+}
+
+fn log_indicates_clean_completed_dump(text: &str) -> bool {
+    let mut has_end = false;
+    let mut has_zero_scsi = false;
+    let mut has_zero_c2 = false;
+
+    for line in text.lines() {
+        let lower = line.to_ascii_lowercase();
+        let trimmed = lower.trim();
+        if trimmed.starts_with("*** end") {
+            has_end = true;
+        }
+        has_zero_scsi = has_zero_scsi || line_has_zero_metric(&lower, "scsi");
+        has_zero_c2 = has_zero_c2 || line_has_zero_metric(&lower, "c2");
+    }
+
+    has_end && has_zero_scsi && has_zero_c2
 }
 
 fn line_has_refinable_read_errors(line: &str) -> bool {
@@ -1995,6 +2053,24 @@ fn line_has_positive_metric(line: &str, metric: &str) -> bool {
         });
         let digits: String = after.chars().take_while(|ch| ch.is_ascii_digit()).collect();
         if !digits.is_empty() && digits.parse::<u64>().unwrap_or(0) > 0 {
+            return true;
+        }
+        search_start = index;
+    }
+
+    false
+}
+
+fn line_has_zero_metric(line: &str, metric: &str) -> bool {
+    let mut search_start = 0usize;
+    while let Some(relative_index) = line[search_start..].find(metric) {
+        let index = search_start + relative_index + metric.len();
+        let after = &line[index..];
+        let after = after.trim_start_matches(|ch: char| {
+            ch.is_whitespace() || matches!(ch, ':' | 's' | '=' | '/' | ',' | '{' | '[' | '(')
+        });
+        let digits: String = after.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+        if !digits.is_empty() && digits.parse::<u64>().unwrap_or(1) == 0 {
             return true;
         }
         search_start = index;
@@ -4323,6 +4399,55 @@ mod tests {
     }
 
     #[test]
+    fn finds_refine_candidate_for_incomplete_scram_log() {
+        let dir = test_temp_dir("scram-incomplete");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("my_disc_20260625-1829.scram"), b"scrambled data").unwrap();
+        fs::write(
+            dir.join("my_disc_20260625-1829.log"),
+            r#"*** DUMP (time check: 0s)
+
+disc TOC:
+  track 1 {  data }
+    index 01 { LBA:      0, MSF: 00:02:00 }
+"#,
+        )
+        .unwrap();
+
+        let candidate = image_candidate_for_directory(&dir, None).unwrap().unwrap();
+
+        assert_eq!(candidate.image_name, "my_disc_20260625-1829");
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn finds_refine_candidate_for_scram_log_without_clean_error_summary() {
+        let dir = test_temp_dir("scram-no-clean-summary");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("sample.scram"), b"scrambled data").unwrap();
+        fs::write(
+            dir.join("sample.log"),
+            r#"*** DUMP (time check: 0s)
+
+disc TOC:
+  track 1 {  data }
+
+*** END (time check: 1s)
+"#,
+        )
+        .unwrap();
+
+        let candidate = image_candidate_for_directory(&dir, None).unwrap().unwrap();
+
+        assert_eq!(candidate.image_name, "sample");
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn finds_refine_candidate_when_volume_name_matches_drive() {
         let dir = test_temp_dir("scram-volume-match");
         let _ = fs::remove_dir_all(&dir);
@@ -4422,6 +4547,8 @@ media errors:
   SCSI: 0 samples
   C2: 0 samples
   Q: 0
+
+*** END (time check: 1s)
 "#,
         )
         .unwrap();

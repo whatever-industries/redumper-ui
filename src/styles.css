@@ -186,12 +186,13 @@ textarea {
 
 .command-row-heading {
   display: grid;
-  grid-template-columns: var(--settings-label-width) max-content max-content max-content;
+  grid-template-columns: var(--settings-label-width) max-content 1px max-content 1px max-content 1px max-content;
   min-height: var(--top-control-height);
   align-items: center;
   column-gap: 6px;
   row-gap: 4px;
   width: min(100%, var(--settings-control-width));
+  white-space: nowrap;
 }
 
 .command-row-heading .settings-label {
@@ -220,10 +221,17 @@ textarea {
   align-items: center;
   gap: 6px;
   color: var(--app-text);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   cursor: pointer;
   user-select: none;
+}
+
+.command-toggle-separator {
+  display: inline-block;
+  width: 1px;
+  height: 18px;
+  background: var(--app-border);
 }
 
 .preview-field {

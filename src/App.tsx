@@ -205,6 +205,7 @@ export default function App() {
   const commandId = genericUserModeActive ? "dump" : "disc";
   const command = getCommand(commandId);
   const ringsEnabled = Boolean(optionState["--rings"]?.enabled);
+  const verboseEnabled = Boolean(optionState["--verbose"]?.enabled);
   const suggestedImageName = useMemo(
     () => suggestImageName(selectedDrive?.volumeName || selectedDrive?.label || drive, imageNameSeed),
     [drive, imageNameSeed, selectedDrive?.label, selectedDrive?.volumeName]
@@ -607,16 +608,12 @@ export default function App() {
 
       setExistingImageChecking(true);
       try {
-        const driveContext = {
-          driveVolumeName: meaningfulVolumeName(selectedDrive?.volumeName) ?? volumeNameFromDriveLabel(selectedDrive?.label),
-          driveLabel: selectedDrive?.label ?? undefined
-        };
-        const candidate =
-          (await invoke<ExistingImageCandidate | null>("find_existing_image_candidate", { directory: imagePath, ...driveContext })) ??
-          (await invoke<ExistingImageCandidate | null>("find_existing_image_candidate", {
-            directory: joinPath(imagePath, effectiveImageName),
-            ...driveContext
-          }));
+        const candidate = await invoke<ExistingImageCandidate | null>("find_existing_image_candidate_for_output", {
+          imagePath,
+          imageName: effectiveImageName,
+          driveVolumeName: meaningfulVolumeName(selectedDrive?.volumeName) ?? volumeNameFromDriveLabel(selectedDrive?.label) ?? "",
+          driveLabel: selectedDrive?.label ?? ""
+        });
         if (!cancelled) {
           setExistingImageCandidate(candidate);
         }
@@ -797,6 +794,7 @@ export default function App() {
     const selected = await open({ directory: true, multiple: false });
     if (typeof selected === "string") {
       setter(selected);
+      setExistingImageScanVersion((version) => version + 1);
     }
   }
 
@@ -1373,6 +1371,7 @@ export default function App() {
                     />
                     <span>Generic Mode</span>
                   </label>
+                  <span className="command-toggle-separator" aria-hidden="true" />
                   <label className="command-mode-toggle" title="Use redump.info-compatible command">
                     <input
                       type="checkbox"
@@ -1387,6 +1386,7 @@ export default function App() {
                     />
                     <span>Redump Compatible</span>
                   </label>
+                  <span className="command-toggle-separator" aria-hidden="true" />
                   <label className="command-mode-toggle" title="Add rings detection to the dump command">
                     <span>+Rings</span>
                     <input
@@ -1402,6 +1402,25 @@ export default function App() {
                         }))
                       }
                       aria-label="Add rings detection"
+                      className="accent-checkbox command-checkbox shrink-0"
+                    />
+                  </label>
+                  <span className="command-toggle-separator" aria-hidden="true" />
+                  <label className="command-mode-toggle" title="Add verbose output to the dump command">
+                    <span>+Verbose</span>
+                    <input
+                      type="checkbox"
+                      checked={verboseEnabled}
+                      onChange={(event) =>
+                        setOptionState((current) => ({
+                          ...current,
+                          "--verbose": {
+                            enabled: event.target.checked,
+                            value: current["--verbose"]?.value ?? ""
+                          }
+                        }))
+                      }
+                      aria-label="Add verbose output"
                       className="accent-checkbox command-checkbox shrink-0"
                     />
                   </label>
@@ -1489,7 +1508,7 @@ export default function App() {
                       onClick={() => void refineExistingImage()}
                     >
                       <FileSearch size={18} />
-                      Refine Existing Image
+                      Refine
                     </button>
                   ) : null}
                   {splitRunRequest ? (
