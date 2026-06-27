@@ -937,20 +937,17 @@ export default function App() {
   }
 
   async function ejectDrive() {
-    await startRedumperRequest({
-      command: "eject",
-      options: [],
-      driveMode: drive ? "manual" : "auto",
-      drive: drive || undefined,
-      imagePath: undefined,
-      imageName: undefined,
-      workingDirectory: undefined,
-      outputSubfolder: false,
-      archiveFormat,
-      compressLogFiles: false,
-      dumpTwiceCompareHashes: false,
-      dangerConfirmed: false
-    });
+    try {
+      const message = await invoke<string>("eject_drive", {
+        drive: drive || undefined,
+        volumeName: selectedDrive?.volumeName ?? undefined
+      });
+      pushLog("info", message);
+      resetRunVisuals();
+      void refreshDrives(true);
+    } catch (error) {
+      pushLog("error", String(error));
+    }
   }
 
   async function refineExistingImage() {

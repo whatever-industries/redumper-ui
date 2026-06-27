@@ -313,6 +313,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_app_info,
             list_drives,
+            eject_drive,
             find_existing_image_candidate,
             find_existing_image_candidate_for_output,
             check_output_conflict,
@@ -437,6 +438,11 @@ fn list_drives(app: AppHandle) -> Result<Vec<DriveCandidate>, String> {
     let recommended_drives = recommended_drive_signatures(&app).unwrap_or_default();
     mark_drive_compliance(&mut candidates, &recommended_drives);
     Ok(candidates)
+}
+
+#[tauri::command]
+fn eject_drive(drive: Option<String>, volume_name: Option<String>) -> Result<String, String> {
+    platform_eject_drive(drive.as_deref(), volume_name.as_deref())
 }
 
 #[tauri::command]
@@ -3841,6 +3847,165 @@ fn macos_value_is_generic_optical_label(value: &str) -> bool {
             | "optical disc"
             | "optical media"
     )
+}
+
+fn command_output_text(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !stderr.is_empty() {
+        return stderr;
+    }
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+#[cfg(target_os = "macos")]
+fn platform_eject_drive(drive: Option<&str>, volume_name: Option<&str>) -> Result<String, String> {
+    let normalized_drive = drive
+        .and_then(non_empty_trimmed_string)
+        .map(|value| normalize_macos_node(&value));
+
+    if let Some(node) = normalized_drive.as_deref().filter(|node| !node.is_empty()) {
+        let device_path = format!("/dev/{node}");
+        match Command::new("/usr/sbin/diskutil")
+            .args(["eject", &device_path])
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                return Ok(format!("Ejected {node}."));
+            }
+            Ok(output) => {
+                let diskutil_error = command_output_text(&output);
+                if let Some(message) = macos_eject_via_finder(volume_name) {
+                    return Ok(message);
+                }
+                if let Ok(message) = macos_eject_via_drutil() {
+                    return Ok(message);
+                }
+                return Err(format!(
+                    "macOS could not eject {device_path}: {}",
+                    if diskutil_error.is_empty() {
+                        "diskutil exited unsuccessfully.".to_string()
+                    } else {
+                        diskutil_error
+                    }
+                ));
+            }
+            Err(error) => {
+                if let Some(message) = macos_eject_via_finder(volume_name) {
+                    return Ok(message);
+                }
+                if let Ok(message) = macos_eject_via_drutil() {
+                    return Ok(message);
+                }
+                return Err(format!(
+                    "Unable to run diskutil eject for {device_path}: {error}"
+                ));
+            }
+        }
+    }
+
+    if let Some(message) = macos_eject_via_finder(volume_name) {
+        return Ok(message);
+    }
+    macos_eject_via_drutil()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_eject_via_finder(volume_name: Option<&str>) -> Option<String> {
+    let volume_name = volume_name.and_then(non_empty_trimmed_string)?;
+    let script = format!(
+        r#"tell application "Finder" to eject disk "{}""#,
+        volume_name.replace('\\', "\\\\").replace('"', "\\\"")
+    );
+    let output = Command::new("/usr/bin/osascript")
+        .args(["-e", &script])
+        .output()
+        .ok()?;
+    if output.status.success() {
+        Some(format!("Ejected {volume_name}."))
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_eject_via_drutil() -> Result<String, String> {
+    match Command::new("/usr/bin/drutil")
+        .args(["tray", "eject"])
+        .output()
+    {
+        Ok(output) if output.status.success() => Ok("Ejected optical tray.".to_string()),
+        Ok(output) => {
+            let message = command_output_text(&output);
+            Err(if message.is_empty() {
+                "macOS could not eject the optical tray.".to_string()
+            } else {
+                format!("macOS could not eject the optical tray: {message}")
+            })
+        }
+        Err(error) => Err(format!("Unable to run drutil tray eject: {error}")),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn platform_eject_drive(drive: Option<&str>, _volume_name: Option<&str>) -> Result<String, String> {
+    let drive = drive
+        .and_then(non_empty_trimmed_string)
+        .ok_or_else(|| "Select a drive before ejecting.".to_string())?;
+    let normalized = normalize_windows_drive_letter(&drive)
+        .ok_or_else(|| format!("Unable to parse Windows drive letter: {drive}"))?;
+    let script = format!(
+        r#"$shell = New-Object -ComObject Shell.Application;
+$drive = $shell.Namespace(17).ParseName("{}");
+if ($null -eq $drive) {{ throw "Drive not found." }}
+$drive.InvokeVerb("Eject");"#,
+        normalized.replace('\'', "''")
+    );
+    let mut command = Command::new("powershell");
+    suppress_child_console(&mut command);
+    match command
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+    {
+        Ok(output) if output.status.success() => Ok(format!("Ejected {normalized}.")),
+        Ok(output) => {
+            let message = command_output_text(&output);
+            Err(if message.is_empty() {
+                format!("Windows could not eject {normalized}.")
+            } else {
+                format!("Windows could not eject {normalized}: {message}")
+            })
+        }
+        Err(error) => Err(format!(
+            "Unable to run Windows eject for {normalized}: {error}"
+        )),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn platform_eject_drive(drive: Option<&str>, _volume_name: Option<&str>) -> Result<String, String> {
+    let drive = drive
+        .and_then(non_empty_trimmed_string)
+        .ok_or_else(|| "Select a drive before ejecting.".to_string())?;
+    match Command::new("eject").arg(&drive).output() {
+        Ok(output) if output.status.success() => Ok(format!("Ejected {drive}.")),
+        Ok(output) => {
+            let message = command_output_text(&output);
+            Err(if message.is_empty() {
+                format!("Linux could not eject {drive}.")
+            } else {
+                format!("Linux could not eject {drive}: {message}")
+            })
+        }
+        Err(error) => Err(format!("Unable to run eject for {drive}: {error}")),
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+fn platform_eject_drive(
+    _drive: Option<&str>,
+    _volume_name: Option<&str>,
+) -> Result<String, String> {
+    Err("Eject is not supported on this platform.".to_string())
 }
 
 fn push_macos_diskutil_candidate(
