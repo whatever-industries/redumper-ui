@@ -61,6 +61,9 @@ const SETTINGS_STORAGE_KEYS = {
   firmwareForceFlash: "redumper-ui-firmware-force-flash",
   firmwareConfirmed: "redumper-ui-firmware-confirmed"
 } as const;
+const SETTINGS_MIGRATION_KEYS = {
+  ringsDefaultUnchecked: "redumper-ui-migration-rings-default-unchecked"
+} as const;
 const COMPACT_WINDOW_WIDTH = 560;
 const LOG_BODY_HEIGHT = 220;
 const MIN_LOG_BODY_HEIGHT = 140;
@@ -131,12 +134,7 @@ const FALLBACK_INFO: AppInfo = {
   redumperPath: "src-tauri/resources/redumper/bin/redumper",
   redumperAvailable: false,
   resourceDir: "src-tauri/resources/redumper",
-  diagnostics: [
-    {
-      level: "info",
-      message: "Tauri runtime unavailable in browser preview."
-    }
-  ]
+  diagnostics: []
 };
 
 export default function App() {
@@ -193,6 +191,20 @@ export default function App() {
   const cancelRequestedRef = useRef(false);
   const benignCdrEndSectorErrorsRef = useRef(false);
   const activeTheme = themeMode === "system" ? (systemPrefersDark ? "dark" : "light") : themeMode;
+
+  useEffect(() => {
+    if (localStorage.getItem(SETTINGS_MIGRATION_KEYS.ringsDefaultUnchecked) === "true") {
+      return;
+    }
+    localStorage.setItem(SETTINGS_MIGRATION_KEYS.ringsDefaultUnchecked, "true");
+    setOptionState((current) => ({
+      ...current,
+      "--rings": {
+        enabled: false,
+        value: current["--rings"]?.value ?? ""
+      }
+    }));
+  }, [setOptionState]);
 
   const selectedDrive = useMemo(() => drives.find((candidate) => candidate.path === drive), [drive, drives]);
   const selectedMediaKind = selectedDrive?.mediaKind ?? mediaKindFromDriveLabel(selectedDrive?.label);
