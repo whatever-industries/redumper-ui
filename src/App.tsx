@@ -190,6 +190,9 @@ export default function App() {
   const progressRef = useRef<RunEvent["progress"] | null>(null);
   const cancelRequestedRef = useRef(false);
   const benignCdrEndSectorErrorsRef = useRef(false);
+  const cdrRegularTrackC2SectorsRef = useRef(0);
+  const cdrTrailingC2SectorsRef = useRef(0);
+  const cdrLeadInOutC2ErrorsRef = useRef(false);
   const activeTheme = themeMode === "system" ? (systemPrefersDark ? "dark" : "light") : themeMode;
 
   useEffect(() => {
@@ -357,11 +360,40 @@ export default function App() {
     setVisualProgressPercent(0);
     setRunFailed(false);
     setRunSucceeded(false);
-    setBenignCdrEndSectorErrors(false);
-    benignCdrEndSectorErrorsRef.current = false;
+    resetCdrErrorClassification();
     setCancelRequested(false);
     cancelRequestedRef.current = false;
     setStage("Idle");
+  }
+
+  function resetCdrErrorClassification() {
+    cdrRegularTrackC2SectorsRef.current = 0;
+    cdrTrailingC2SectorsRef.current = 0;
+    cdrLeadInOutC2ErrorsRef.current = false;
+    benignCdrEndSectorErrorsRef.current = false;
+    setBenignCdrEndSectorErrors(false);
+  }
+
+  function updateCdrErrorClassification(line: string) {
+    const regularTrackC2Sectors = parseRegularTrackC2Sectors(line);
+    if (regularTrackC2Sectors !== null) {
+      cdrRegularTrackC2SectorsRef.current += regularTrackC2Sectors;
+    }
+
+    const trailingC2Sectors = parseCdrTrailingC2Sectors(line);
+    if (trailingC2Sectors !== null) {
+      cdrTrailingC2SectorsRef.current += trailingC2Sectors;
+    }
+
+    if (isCdrLeadInOutC2ErrorLine(line)) {
+      cdrLeadInOutC2ErrorsRef.current = true;
+    }
+
+    const hasBenignCdrSignal = cdrTrailingC2SectorsRef.current > 0 || cdrLeadInOutC2ErrorsRef.current;
+    const hasInTrackC2Errors = cdrRegularTrackC2SectorsRef.current > cdrTrailingC2SectorsRef.current;
+    const nextBenign = hasBenignCdrSignal && !hasInTrackC2Errors;
+    benignCdrEndSectorErrorsRef.current = nextBenign;
+    setBenignCdrEndSectorErrors(nextBenign);
   }
 
   useEffect(() => {
@@ -599,8 +631,7 @@ export default function App() {
   useEffect(() => {
     setProgress(null);
     setRunSucceeded(false);
-    setBenignCdrEndSectorErrors(false);
-    benignCdrEndSectorErrorsRef.current = false;
+    resetCdrErrorClassification();
     setStage("Idle");
   }, [commandId]);
 
@@ -723,13 +754,12 @@ export default function App() {
   function handleRunEvent(event: RunEvent) {
     if (event.kind === "started") {
       cancelRequestedRef.current = false;
-      benignCdrEndSectorErrorsRef.current = false;
+      resetCdrErrorClassification();
       progressRef.current = null;
       setRunning(true);
       setCancelRequested(false);
       setRunFailed(false);
       setRunSucceeded(false);
-      setBenignCdrEndSectorErrors(false);
       setStage("STARTED");
       setProgress(null);
       setVisualProgressPercent(0);
@@ -752,10 +782,7 @@ export default function App() {
       });
     }
     if (event.line) {
-      if (isBenignCdrEndSectorErrorLine(event.line)) {
-        benignCdrEndSectorErrorsRef.current = true;
-        setBenignCdrEndSectorErrors(true);
-      }
+      updateCdrErrorClassification(event.line);
       const level = event.kind === "warning" || event.kind === "error" || event.kind === "stderr" ? event.kind : "stdout";
       pushLog(level as LogLine["level"], event.line, { replaceProgress: event.kind === "progress" ? true : event.stage === "END" ? "transient" : false });
     }
@@ -900,8 +927,7 @@ export default function App() {
     setVisualProgressPercent(0);
     setRunFailed(false);
     setRunSucceeded(false);
-    setBenignCdrEndSectorErrors(false);
-    benignCdrEndSectorErrorsRef.current = false;
+    resetCdrErrorClassification();
     setExistingImageCandidate(null);
     setActiveDriveLabel(selectedDrive?.label ?? launchRequest.drive ?? "Auto-selected drive");
     setCancelRequested(false);
@@ -1496,7 +1522,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="action-row">
+                <div className={clsx("action-row", (refineRunRequest || splitRunRequest) && "has-workflow-actions")}>
                   <button
                     className={clsx("primary-button", running && "stop-button")}
                     disabled={!running && validationErrors.length > 0}
@@ -1800,6 +1826,13 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function withEnabledFlag(options: RunRequest["options"], flag: string): RunRequest["options"] {
+  if (options.some((option) => option.flag === flag)) {
+    return options.map((option) => (option.flag === flag ? { ...option, enabled: true } : option));
+  }
+  return [...options, { flag, enabled: true }];
+}
+
 function buildExistingImageRunRequest(
   command: ExistingImageActionCommand,
   candidate: ExistingImageCandidate | null,
@@ -1811,6 +1844,7 @@ function buildExistingImageRunRequest(
   }
 
   const usesDrive = command === "refine";
+  const allowedOptions = baseRequest.options.filter((option) => IMAGE_ACTION_ALLOWED_FLAGS[command].has(option.flag));
   return {
     ...baseRequest,
     command,
@@ -1818,7 +1852,7 @@ function buildExistingImageRunRequest(
     drive: usesDrive ? drive || undefined : undefined,
     imagePath: candidate.directory,
     imageName: candidate.imageName,
-    options: baseRequest.options.filter((option) => IMAGE_ACTION_ALLOWED_FLAGS[command].has(option.flag)),
+    options: command === "split" ? withEnabledFlag(allowedOptions, "--force-split") : allowedOptions,
     outputSubfolder: false,
     compressLogFiles: false,
     dumpTwiceCompareHashes: false,
@@ -2416,11 +2450,34 @@ function progressHasErrors(progress: RunEvent["progress"] | null | undefined) {
 }
 
 function progressHasBlockingErrors(progress: RunEvent["progress"] | null | undefined, benignCdrEndSectorErrors: boolean) {
-  return progressHasErrors(progress) && !benignCdrEndSectorErrors;
+  if (!progress) {
+    return false;
+  }
+  if ((progress.scsiErrors ?? 0) > 0 || (progress.edcErrors ?? 0) > 0) {
+    return true;
+  }
+  return (progress.c2Errors ?? 0) > 0 && !benignCdrEndSectorErrors;
 }
 
-function isBenignCdrEndSectorErrorLine(line: string) {
-  return line.toLowerCase().includes("cd-r trailing c2 errors detected");
+function parseRegularTrackC2Sectors(line: string) {
+  const match = line.match(/errors detected,\s*track:\s*(\d{1,2})\b.*?sectors:\s*\{[^}]*\bC2:\s*(\d+)/i);
+  if (!match) {
+    return null;
+  }
+  const track = Number(match[1]);
+  if (!Number.isFinite(track) || track < 1 || track > 99) {
+    return null;
+  }
+  return Number(match[2]);
+}
+
+function parseCdrTrailingC2Sectors(line: string) {
+  const match = line.match(/CD-R trailing C2 errors detected\s*\(sectors:\s*(\d+)\)/i);
+  return match ? Number(match[1]) : null;
+}
+
+function isCdrLeadInOutC2ErrorLine(line: string) {
+  return /CD-R lead-in\/lead-out C2 errors detected/i.test(line);
 }
 
 function Metric({

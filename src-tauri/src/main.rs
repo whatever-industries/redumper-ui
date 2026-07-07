@@ -1984,7 +1984,7 @@ fn image_candidate_for_directory(
         image_name,
         files,
         supports_refine: true,
-        supports_split: false,
+        supports_split: true,
         supports_hash: false,
     }))
 }
@@ -4496,7 +4496,7 @@ mod tests {
             vec!["sample.log".to_string(), "sample.scram".to_string()]
         );
         assert!(candidate.supports_refine);
-        assert!(!candidate.supports_split);
+        assert!(candidate.supports_split);
         assert!(!candidate.supports_hash);
 
         fs::remove_dir_all(dir).unwrap();

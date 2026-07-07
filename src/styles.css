@@ -804,6 +804,10 @@ select:focus-visible {
   max-width: calc(100% - 50px);
 }
 
+.action-row.has-workflow-actions .primary-button {
+  flex: 0 0 auto;
+}
+
 .workflow-action-button {
   flex: 0 0 auto;
   white-space: nowrap;
