@@ -1,39 +1,39 @@
 {
   "owner": "superg",
   "repo": "redumper",
-  "tag": "b731",
-  "publishedAt": "2026-07-11T11:49:43Z",
-  "appVersion": "0.1.731",
+  "tag": "b732",
+  "publishedAt": "2026-07-12T21:52:23Z",
+  "appVersion": "0.1.732",
   "assets": {
     "linux-arm64": {
-      "name": "redumper-b731-linux-arm64.zip",
-      "url": "https://github.com/superg/redumper/releases/download/b731/redumper-b731-linux-arm64.zip",
-      "sha256": "78f69b3e1502ef11c9ef28fc5bec0028136c5d5ec2c166fabacb69f4791ace11"
+      "name": "redumper-b732-linux-arm64.zip",
+      "url": "https://github.com/superg/redumper/releases/download/b732/redumper-b732-linux-arm64.zip",
+      "sha256": "bda7f1d247a3d642111d9607463734e479b74aeaaf33403832a7d80ec321ae83"
     },
     "linux-x64": {
-      "name": "redumper-b731-linux-x64.zip",
-      "url": "https://github.com/superg/redumper/releases/download/b731/redumper-b731-linux-x64.zip",
-      "sha256": "8af03d84252983cb893bf17f47c7284c8cb3edce2aeb1361c1f6e073e8c3d97e"
+      "name": "redumper-b732-linux-x64.zip",
+      "url": "https://github.com/superg/redumper/releases/download/b732/redumper-b732-linux-x64.zip",
+      "sha256": "687a6ddef45092397aab6243ea854742033de722e28064896f651487a77ba1ee"
     },
     "macos-arm64": {
-      "name": "redumper-b731-macos-arm64.zip",
-      "url": "https://github.com/superg/redumper/releases/download/b731/redumper-b731-macos-arm64.zip",
-      "sha256": "fdc14e3932f051118069db357dedd84a71e9d8c4a0894783f35538464018045f"
+      "name": "redumper-b732-macos-arm64.zip",
+      "url": "https://github.com/superg/redumper/releases/download/b732/redumper-b732-macos-arm64.zip",
+      "sha256": "f06cbab4dcfb72c253c41ed385ef26ce2e3cc00c13750be5bbcc3a47b1455bd7"
     },
     "macos-x64": {
-      "name": "redumper-b731-macos-x64.zip",
-      "url": "https://github.com/superg/redumper/releases/download/b731/redumper-b731-macos-x64.zip",
-      "sha256": "1366d478f1cc1ff1ad8da486ed9efb887df64ba44392816b1636317fe3deff2f"
+      "name": "redumper-b732-macos-x64.zip",
+      "url": "https://github.com/superg/redumper/releases/download/b732/redumper-b732-macos-x64.zip",
+      "sha256": "7372b48d49e494e01c9cc6e1782798a43ddc16fa87e4741dbcdec8aa4dd09584"
     },
     "windows-arm64": {
-      "name": "redumper-b731-windows-arm64.zip",
-      "url": "https://github.com/superg/redumper/releases/download/b731/redumper-b731-windows-arm64.zip",
-      "sha256": "4e8d39bf1104fca4cae19dae717ca379d96bbcb44ed5a929f5df295c8afcac8b"
+      "name": "redumper-b732-windows-arm64.zip",
+      "url": "https://github.com/superg/redumper/releases/download/b732/redumper-b732-windows-arm64.zip",
+      "sha256": "5333ffcd8d7ec055f1b48540bfd281cdf14d9e0a7bfc560bc317b2f16fefce98"
     },
     "windows-x64": {
-      "name": "redumper-b731-windows-x64.zip",
-      "url": "https://github.com/superg/redumper/releases/download/b731/redumper-b731-windows-x64.zip",
-      "sha256": "11267cded3bef46bd5a61a0d48a862ddf629b794e481cc8bbd67a9c9762cb039"
+      "name": "redumper-b732-windows-x64.zip",
+      "url": "https://github.com/superg/redumper/releases/download/b732/redumper-b732-windows-x64.zip",
+      "sha256": "eea429c3f82a9c7cd97029ca73a60b90297505c6250bb5565069faf78f189a3d"
     }
   }
 }
