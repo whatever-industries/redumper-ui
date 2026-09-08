@@ -1923,6 +1923,8 @@ fn image_candidate_for_directory(
 
     let mut log_files = Vec::new();
     let mut scram_files = Vec::new();
+    let mut image_files = Vec::new();
+    let mut has_state = false;
     let mut has_bin = false;
     for entry in fs::read_dir(directory)
         .map_err(|e| {
@@ -1940,12 +1942,17 @@ fn image_candidate_for_directory(
         match file_extension(&path).as_deref() {
             Some("log") => log_files.push(path),
             Some("scram") => scram_files.push(path),
+            Some("iso" | "img" | "raw" | "sdram" | "sbram") => image_files.push(path),
+            Some("state") => has_state = true,
             Some("bin") => has_bin = true,
             _ => {}
         }
     }
 
-    if has_bin || log_files.is_empty() || scram_files.is_empty() {
+    if has_bin
+        || log_files.is_empty()
+        || (scram_files.is_empty() && (!has_state || image_files.is_empty()))
+    {
         return Ok(None);
     }
 
@@ -1960,7 +1967,11 @@ fn image_candidate_for_directory(
     }
 
     let mut files = Vec::new();
-    for path in log_files.iter().chain(scram_files.iter()) {
+    for path in log_files
+        .iter()
+        .chain(scram_files.iter())
+        .chain(image_files.iter())
+    {
         files.push(file_name(path)?);
     }
     files.sort();
@@ -1968,6 +1979,7 @@ fn image_candidate_for_directory(
 
     let image_name = scram_files
         .iter()
+        .chain(image_files.iter())
         .filter_map(|path| path.file_stem().and_then(|value| value.to_str()))
         .min()
         .unwrap_or_default()
@@ -1984,8 +1996,8 @@ fn image_candidate_for_directory(
         image_name,
         files,
         supports_refine: true,
-        supports_split: true,
-        supports_hash: false,
+        supports_split: !scram_files.is_empty(),
+        supports_hash: scram_files.is_empty(),
     }))
 }
 
@@ -1994,17 +2006,13 @@ fn image_candidate_for_output_selection(
     image_name: &str,
     match_context: Option<ExistingImageMatchContext>,
 ) -> Result<Option<ExistingImageCandidate>, String> {
-    if let Some(candidate) = image_candidate_for_directory(image_path, None)? {
+    if let Some(candidate) = image_candidate_for_directory(image_path, match_context.clone())? {
         return Ok(Some(candidate));
     }
 
     let output_directory = image_path.join(image_name);
-    if let Some(candidate) = image_candidate_for_directory(&output_directory, None)? {
+    if let Some(candidate) = image_candidate_for_directory(&output_directory, match_context)? {
         return Ok(Some(candidate));
-    }
-
-    if let Some(context) = match_context {
-        return image_candidate_for_directory(&output_directory, Some(context));
     }
 
     Ok(None)
@@ -4100,9 +4108,9 @@ fn command_writes_files(command: &str) -> bool {
             | "info"
             | "skeleton"
             | "rings"
-            | "subchannel"
-            | "fixmsf"
-            | "debug::flip"
+            | "tools::fixmsf"
+            | "tools::fixmsf::shift"
+            | "tools::trim"
     )
 }
 
@@ -4125,9 +4133,9 @@ fn image_name_required(command: &str) -> bool {
             | "hash"
             | "info"
             | "skeleton"
-            | "subchannel"
-            | "fixmsf"
-            | "debug::flip"
+            | "tools::fixmsf"
+            | "tools::fixmsf::shift"
+            | "tools::trim"
     )
 }
 
@@ -4149,10 +4157,9 @@ fn allowed_commands() -> HashSet<&'static str> {
         "flash::mt1959",
         "flash::sd616",
         "flash::plextor",
-        "subchannel",
-        "debug",
-        "debug::flip",
-        "fixmsf",
+        "tools::fixmsf",
+        "tools::fixmsf::shift",
+        "tools::trim",
         "rings",
         "drive::test",
     ]
@@ -4183,6 +4190,7 @@ fn allowed_options() -> HashSet<&'static str> {
         "--drive-pregap-start",
         "--drive-read-method",
         "--drive-sector-order",
+        "--auto-detect",
         "--speed",
         "--retries",
         "--refine-subchannel",
@@ -4201,9 +4209,11 @@ fn allowed_options() -> HashSet<&'static str> {
         "--plextor-leadin-force-store",
         "--mediatek-skip-leadout",
         "--mediatek-leadout-retries",
+        "--generic-skip-leadin",
         "--kreon-partial-ss",
         "--dvd-raw",
         "--bd-raw",
+        "--force-omnidrive",
         "--disable-cdtext",
         "--correct-offset-shift",
         "--offset-shift-relocate",
@@ -4695,6 +4705,101 @@ disc TOC:
             candidate.image_name,
             "not_applicable_no_file_system_20260618-1455"
         );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn finds_refine_candidate_for_stateful_iso_log_with_drive_volume_match() {
+        let dir = test_temp_dir("stateful-iso-refine");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("2019_summer_refresh_game_89_20260907-2245.iso"),
+            b"iso",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("2019_summer_refresh_game_89_20260907-2245.state"),
+            b"state",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("2019_summer_refresh_game_89_20260907-2245.log"),
+            "error: failed to create SCSI task",
+        )
+        .unwrap();
+
+        let candidate = image_candidate_for_directory(
+            &dir,
+            ExistingImageMatchContext::from_drive(
+                Some("2019 Summer Refresh Game 89".to_string()),
+                Some("disk4 (2019 Summer Refresh Game 89)".to_string()),
+            ),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            candidate.image_name,
+            "2019_summer_refresh_game_89_20260907-2245"
+        );
+        assert!(candidate.supports_refine);
+        assert!(!candidate.supports_split);
+        assert!(candidate.supports_hash);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn ignores_stateful_iso_refine_candidate_when_volume_name_does_not_match_drive() {
+        let dir = test_temp_dir("stateful-iso-mismatch");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("other_disc_20260907-2245.iso"), b"iso").unwrap();
+        fs::write(dir.join("other_disc_20260907-2245.state"), b"state").unwrap();
+        fs::write(
+            dir.join("other_disc_20260907-2245.log"),
+            "error: failed to create SCSI task",
+        )
+        .unwrap();
+
+        let candidate = image_candidate_for_directory(
+            &dir,
+            ExistingImageMatchContext::from_drive(
+                Some("2019 Summer Refresh Game 89".to_string()),
+                Some("disk4 (2019 Summer Refresh Game 89)".to_string()),
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(candidate, None);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn ignores_clean_stateful_iso_refine_candidate() {
+        let dir = test_temp_dir("stateful-iso-clean");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("movie.iso"), b"iso").unwrap();
+        fs::write(dir.join("movie.state"), b"state").unwrap();
+        fs::write(
+            dir.join("movie.log"),
+            r#"media errors:
+  SCSI: 0 samples
+  C2: 0 samples
+  Q: 0
+
+*** END (time check: 1s)
+"#,
+        )
+        .unwrap();
+
+        let candidate = image_candidate_for_directory(&dir, None).unwrap();
+
+        assert_eq!(candidate, None);
 
         fs::remove_dir_all(dir).unwrap();
     }

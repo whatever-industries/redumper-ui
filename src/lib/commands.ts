@@ -19,10 +19,9 @@ export const COMMANDS: CommandSpec[] = [
   { id: "flash::mt1959", label: "Flash MT1959", category: "Firmware", danger: "dangerous", requiresDrive: true, requiresImageName: false, writesFiles: false },
   { id: "flash::sd616", label: "Flash SD-616", category: "Firmware", danger: "dangerous", requiresDrive: true, requiresImageName: false, writesFiles: false },
   { id: "flash::plextor", label: "Flash Plextor", category: "Firmware", danger: "dangerous", requiresDrive: true, requiresImageName: false, writesFiles: false },
-  { id: "subchannel", label: "Subchannel", category: "Debug", danger: "advanced", requiresDrive: false, requiresImageName: true, writesFiles: true },
-  { id: "fixmsf", label: "Fix MSF", category: "Debug", danger: "advanced", requiresDrive: false, requiresImageName: true, writesFiles: true },
-  { id: "debug", label: "Debug", category: "Debug", danger: "advanced", requiresDrive: false, requiresImageName: false, writesFiles: false },
-  { id: "debug::flip", label: "Debug Flip", category: "Debug", danger: "advanced", requiresDrive: false, requiresImageName: true, writesFiles: true }
+  { id: "tools::fixmsf", label: "Fix MSF", category: "Debug", danger: "advanced", requiresDrive: false, requiresImageName: true, writesFiles: true },
+  { id: "tools::fixmsf::shift", label: "Fix MSF Shift", category: "Debug", danger: "advanced", requiresDrive: false, requiresImageName: true, writesFiles: true },
+  { id: "tools::trim", label: "Trim", category: "Debug", danger: "advanced", requiresDrive: false, requiresImageName: true, writesFiles: true }
 ];
 
 export const OPTIONS: OptionSpec[] = [
@@ -35,12 +34,13 @@ export const OPTIONS: OptionSpec[] = [
   { flag: "--speed", label: "Read Speed", type: "number", group: "Drive", placeholder: "8" },
   { flag: "--retries", label: "Retries", type: "number", group: "Drive", defaultValue: "100", defaultEnabled: true },
   { flag: "--scsi-timeout", label: "SCSI Timeout", type: "number", group: "Drive", defaultValue: "50000" },
-  { flag: "--drive-type", label: "Drive Type", type: "enum", group: "Drive", values: ["GENERIC", "PLEXTOR", "MTK2", "MTK2B", "MTK3", "MTK8A", "MTK8B", "MTK8C"] },
+  { flag: "--drive-type", label: "Drive Type", type: "enum", group: "Drive", values: ["GENERIC", "PLEXTOR", "MTK2", "MTK3", "MTK8A", "MTK8B", "MTK8C"] },
   { flag: "--drive-read-offset", label: "Drive Read Offset", type: "number", group: "Drive" },
   { flag: "--drive-c2-shift", label: "Drive C2 Shift", type: "number", group: "Drive" },
   { flag: "--drive-pregap-start", label: "Drive Pregap Start", type: "number", group: "Drive", placeholder: "-135" },
   { flag: "--drive-read-method", label: "Drive Read Method", type: "enum", group: "Drive", values: ["BE", "D8", "BE_CDDA"] },
   { flag: "--drive-sector-order", label: "Drive Sector Order", type: "enum", group: "Drive", values: ["DATA_C2_SUB", "DATA_SUB_C2", "DATA_SUB", "DATA_C2"] },
+  { flag: "--auto-detect", label: "Auto Detect Generic Drive", type: "boolean", group: "Drive" },
   { flag: "--refine-subchannel", label: "Refine Subchannel", type: "boolean", group: "CD Dump" },
   { flag: "--refine-sector-mode", label: "Refine Sector Mode", type: "boolean", group: "CD Dump" },
   { flag: "--continue", label: "Continue From", type: "enum", group: "CD Dump", values: ["dump", "dump::extra", "protection", "refine", "dvdkey", "split", "hash", "info", "skeleton"] },
@@ -54,6 +54,7 @@ export const OPTIONS: OptionSpec[] = [
   { flag: "--plextor-leadin-force-store", label: "Plextor Force Store Lead-In", type: "boolean", group: "CD Dump", danger: "advanced" },
   { flag: "--mediatek-skip-leadout", label: "MediaTek Skip Lead-Out", type: "boolean", group: "CD Dump" },
   { flag: "--mediatek-leadout-retries", label: "MediaTek Lead-Out Retries", type: "number", group: "CD Dump", defaultValue: "32" },
+  { flag: "--generic-skip-leadin", label: "Generic Skip Lead-In", type: "boolean", group: "CD Dump" },
   { flag: "--disable-cdtext", label: "Disable CD-TEXT", type: "boolean", group: "CD Dump" },
   { flag: "--overread-leadout", label: "Overread Lead-Out", type: "boolean", group: "CD Dump", danger: "advanced" },
   { flag: "--force-unscrambled", label: "Force Unscrambled", type: "boolean", group: "CD Dump", danger: "advanced" },
@@ -62,6 +63,7 @@ export const OPTIONS: OptionSpec[] = [
   { flag: "--kreon-partial-ss", label: "Kreon Partial Security Sector", type: "boolean", group: "DVD/BD" },
   { flag: "--dvd-raw", label: "DVD Raw", type: "boolean", group: "DVD/BD", danger: "advanced" },
   { flag: "--bd-raw", label: "BD Raw", type: "boolean", group: "DVD/BD", danger: "advanced" },
+  { flag: "--force-omnidrive", label: "Force OmniDrive", type: "boolean", group: "DVD/BD", danger: "advanced" },
   { flag: "--dump-read-size", label: "Dump Read Size", type: "number", group: "DVD/BD" },
   { flag: "--filesystem-trim", label: "Filesystem Trim", type: "boolean", group: "DVD/BD" },
   { flag: "--force-split", label: "Force Split", type: "boolean", group: "Split", danger: "advanced" },
