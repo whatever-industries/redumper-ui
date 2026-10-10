@@ -1,6 +1,8 @@
-[![Stand With Ukraine](assets/banners/stand-with-ukraine-redumper.svg)](https://stand-with-ukraine.pp.ua)
-
 # Redumper UI
+
+> **Project retired:** Redumper UI has been superseded by [Disc Xplorer's dumping capability](https://github.com/whatever-industries/disc-xplorer) and is no longer maintained. Use Disc Xplorer for continued disc dumping. This repository and its [final release, version 760](https://github.com/whatever-industries/redumper-ui/releases/tag/v760), are preserved for reference and community forks. No further updates or support are planned.
+
+[![Stand With Ukraine](assets/banners/stand-with-ukraine-redumper.svg)](https://stand-with-ukraine.pp.ua)
 
 Cross-platform desktop frontend for [`superg/redumper`](https://github.com/superg/redumper).
 
@@ -36,17 +38,15 @@ npm run typecheck
 npm run update-upstream
 ```
 
-## Release Model
+## Final Release
 
-The `Check Upstream Release` workflow compares the latest upstream redumper tag
-against `.redumper/upstream.json`. If it changes, the workflow updates the
-manifest and app version, commits that change, and starts the cross-platform
-release workflow.
+[Version 760](https://github.com/whatever-industries/redumper-ui/releases/tag/v760)
+is the final maintained release, bundling redumper b760. Downloads remain
+available for Windows x64/ARM64, macOS x64/ARM64, and Linux x64/ARM64.
+Automatic upstream checks and release builds have been disabled.
 
-Release builds target Windows x64/ARM64, macOS x64/ARM64, and Linux x64/ARM64.
-The release workflow publishes draft releases in
-[`whatever-industries/redumper-ui`](https://github.com/whatever-industries/redumper-ui)
-and promotes the release after all matrix jobs finish.
+For continued development of the underlying CLI, see
+[`superg/redumper`](https://github.com/superg/redumper).
 
 ## Licensing
 
